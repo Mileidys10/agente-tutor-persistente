@@ -174,10 +174,13 @@ class AgenteTutor:
         self.memoria.anotar("decision", motivo)
         tarjeta = self.banco.por_id.get(str(tema.get("ref_externa"))) if tema.get("origen") == "devcards" else None
         if tarjeta is not None:
-            datos = BancoDevCards.pregunta_de(tarjeta, int(tema["aciertos"]) + int(tema["fallos"]))
+            vista_antes = int(tema["aciertos"]) + int(tema["fallos"])
+            datos = BancoDevCards.pregunta_de(tarjeta, vista_antes)
+            # Solo la primera vez se lee la tarjeta; en los repasos se responde de memoria (recuerdo activo).
             p = self.memoria.crear_pregunta(
                 int(tema["id"]), datos["texto"], datos["respuesta_esperada"], motivo, "devcards",
                 opciones=datos["opciones"], explicacion=datos["explicacion"],
+                requiere_lectura=self.config.leer_antes and vista_antes == 0,
             )
         else:
             preg = self.cerebro.generar_pregunta(
@@ -195,6 +198,8 @@ class AgenteTutor:
                 raise LookupError("No existe esa pregunta")
             if p["estado"] != "pendiente":
                 raise ValueError("La pregunta ya fue respondida")
+            if p.get("requiere_lectura"):
+                raise ValueError("Primero lee la tarjeta")
             tema = self.memoria.obtener_tema(int(p["tema_id"]))
             if tema is None:
                 raise LookupError("El tema de esa pregunta ya no existe")
@@ -232,6 +237,31 @@ class AgenteTutor:
                 "facilidad": nuevo.facilidad,
                 "proximo_repaso": proximo,
             }
+
+    def marcar_leida(self, pregunta_id: int) -> dict[str, Any]:
+        with self._lock:
+            p = self.memoria.obtener_pregunta(pregunta_id)
+            ya_leida = bool(p and p.get("leida_en"))
+            leida_en = self.memoria.marcar_leida(pregunta_id)  # LookupError / ValueError si no aplica
+            if p is not None and not ya_leida:
+                self.memoria.anotar(
+                    "decision", f"Leíste la DevCard «{p['tema']}» (me lo confirmaste): ahora sí te hago su pregunta."
+                )
+            return {"pregunta_id": pregunta_id, "leida_en": leida_en}
+
+    def lectura_de(self, p: dict[str, Any]) -> Optional[dict[str, str]]:
+        """La tarjeta completa para leer, solo mientras la pregunta la exige."""
+        if not p.get("requiere_lectura"):
+            return None
+        t = self.banco.por_id.get(str(p.get("ref_externa")))
+        if t is None:
+            return None
+        return {
+            "titulo": str(t.get("title", "")), "categoria": str(t.get("category", "")),
+            "dificultad": str(t.get("difficulty", "")), "definicion": str(t.get("definition", "")),
+            "analogia": str(t.get("analogy", "")), "codigo": str(t.get("code_example", "") or ""),
+            "idea_clave": str(t.get("key_takeaway", "")),
+        }
 
     @staticmethod
     def _corregir_opcion_multiple(p: dict[str, Any], texto: str) -> tuple[int, str, str]:

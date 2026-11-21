@@ -35,3 +35,24 @@ En las preguntas de opción múltiple (`opciones` no es null), la respuesta se e
 `POST /mcp` (Streamable HTTP, con `Authorization: Bearer <TUTOR_TOKEN>`). Herramientas: `agregar_tema`,
 `ver_preguntas_pendientes`, `responder_pregunta`, `ver_mazos`, `activar_mazo`, `ver_progreso`, `ver_estado` y `ver_bitacora`.
 Local por stdio: `python -m app.mcp_tools`.
+
+## Modo "leer antes de responder" (v1.1)
+Cuando el agente presenta una DevCard **nueva**, la pregunta exige leer la tarjeta primero.
+`TUTOR_LEER_ANTES=0` desactiva el modo (por defecto está activo).
+
+`GET /api/preguntas/pendientes` añade a cada pregunta:
+- `requiere_lectura: bool` → `true` si hay que leer la tarjeta antes de responder (todavía no se marcó como leída).
+- `lectura: {titulo, categoria, dificultad, definicion, analogia, codigo, idea_clave} | null` → la tarjeta completa
+  mientras `requiere_lectura` es `true`; si no, `null`. `codigo` puede ser `""`. Se muestra como texto (nunca como HTML)
+  y `codigo` en un `<pre><code>`.
+
+`POST /api/preguntas/{id}/leida` (requiere token) → `{pregunta_id, leida_en}`. `404` si no existe; `409` si ya no está pendiente.
+Es idempotente: marcarla dos veces no falla.
+
+`POST /api/preguntas/{id}/responder` sobre una pregunta con `requiere_lectura: true` → `409 {"detail": "Primero lee la tarjeta"}`.
+
+MCP: nueva herramienta `marcar_tarjeta_leida(pregunta_id)`; `ver_preguntas_pendientes` incluye `requiere_lectura` y `lectura`.
+
+Flujo de la interfaz: si `requiere_lectura`, la tarjeta de la pregunta muestra **solo la lectura** (título, definición,
+analogía, código e idea clave) y un botón **"Ya la leí, hazme la pregunta"**. Al pulsarlo (`POST .../leida`) la tarjeta pasa
+a mostrar la pregunta y sus opciones **sin recargar**, y el foco del teclado va a la pregunta.

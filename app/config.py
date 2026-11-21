@@ -26,6 +26,7 @@ class Config:
     nuevas_por_dia: int
     token: str
     autonomo: bool
+    leer_antes: bool = True
 
     @staticmethod
     def desde_entorno() -> "Config":
@@ -44,4 +45,6 @@ class Config:
             # Si se define, las operaciones que escriben exigen este token (cabecera X-Tutor-Token o Bearer).
             token=os.environ.get("TUTOR_TOKEN", "").strip(),
             autonomo=os.environ.get("TUTOR_AUTONOMO", "1") != "0",
+            # Modo "leer antes de responder": una DevCard nueva se muestra completa antes de su quiz.
+            leer_antes=os.environ.get("TUTOR_LEER_ANTES", "1") != "0",
         )

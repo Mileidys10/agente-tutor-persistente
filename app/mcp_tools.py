@@ -19,7 +19,7 @@ def _limpiar(p: dict[str, Any]) -> dict[str, Any]:
     # Nunca se revela la respuesta esperada antes de que la persona conteste.
     return {
         "pregunta_id": p["id"], "tema": p.get("tema"), "pregunta": p["texto"], "opciones": p.get("opciones"),
-        "motivo": p.get("motivo"),
+        "motivo": p.get("motivo"), "requiere_lectura": bool(p.get("requiere_lectura")),
     }
 
 
@@ -42,7 +42,12 @@ def crear_servidor_mcp(agente: AgenteTutor) -> MCPServer:
     def ver_preguntas_pendientes() -> list[dict[str, Any]]:
         if not agente.vivo:  # modo stdio sin hilo de fondo: se ejecuta un ciclo al consultar
             agente.ciclo()
-        return [_limpiar(p) for p in agente.memoria.pendientes()]
+        return [{**_limpiar(p), "lectura": agente.lectura_de(p)} for p in agente.memoria.pendientes()]
+
+    @mcp.tool(description="Marca como leída la DevCard de una pregunta (paso previo obligatorio si requiere_lectura es true).")
+    def marcar_tarjeta_leida(pregunta_id: int) -> dict[str, Any]:
+        r = agente.marcar_leida(pregunta_id)
+        return {**r, "leida_en": r["leida_en"].isoformat()}
 
     @mcp.tool(description="Envía la respuesta de la persona a una pregunta pendiente. Para opción múltiple vale la letra (A, B, C...).")
     def responder_pregunta(pregunta_id: int, respuesta: str) -> dict[str, Any]:

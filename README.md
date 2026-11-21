@@ -9,7 +9,7 @@ Agente autónomo de estudio con memoria duradera en base de datos, repetición e
 1. **Ciclo autónomo en segundo plano (`app/agente.py`)**: Al arrancar FastAPI, `AgenteTutor` inicia un hilo en segundo plano que despierta cada `TUTOR_INTERVALO_S` segundos, inspecciona qué temas vencieron o qué mazos activos tienen tarjetas nuevas, prioriza por retraso y dificultad (`dias_retraso + 2 * (2.5 - facilidad) + 0.5 * fallos`) y prepara preguntas pendientes hasta `TUTOR_MAX_PENDIENTES`.
 2. **Memoria duradera en PostgreSQL / SQLite (`app/memoria.py`)**: Todo el conocimiento operativo (tablas `temas`, `preguntas`, `respuestas`, `mazos`, `bitacora` y `latido`) vive en base de datos mediante SQLAlchemy Core. Al volver a encenderse tras un reinicio o fallo, el proceso incrementa `latido.arranques`, consulta `temas` y `pendientes`, y registra en `bitacora`: *«Desperté por N.ª vez. Recuerdo X temas, Y preguntas pendientes y Z ciclos de trabajo»*.
 3. **Bitácora auditable de decisiones (`tabla bitacora`)**: Cada arranque (`sistema`), ciclo (`ciclo`), criterio de selección (`decision`), generación (`pregunta`), calificación (`evaluacion`) o incidente (`error`) queda guardado con marca temporal UTC. En la interfaz web, cada pregunta pendiente muestra además el campo `motivo` explicando por qué el agente decidió hacerla ahora.
-4. **Planificación adaptativa con SM-2 (`app/sm2.py`)**: Cada respuesta se evalúa de `0` a `5` (con Gemini o con el motor determinista local cuando no hay clave o conexión). El algoritmo **SuperMemo 2** recalcula `repeticiones`, `facilidad` (mínimo `1.3`) e `intervalo_dias`, y programa `proximo_repaso` en la base de datos. Con `TUTOR_MINUTOS_POR_DIA=1`, un «día» de repaso dura 1 minuto para demostrar el retorno de temas en clase.
+4. **Planificación adaptativa con SM-2 (`app/sm2.py`) y lectura guiada previa**: Cada DevCard nueva exige leer primero su ficha completa (título, definición, analogía, ejemplo de código e idea clave) antes de desbloquear la pregunta (`TUTOR_LEER_ANTES=1`), mientras que en repasos siguientes pregunta directo. Cada respuesta se evalúa de `0` a `5` (con Gemini o con el motor determinista local cuando no hay clave o conexión). El algoritmo **SuperMemo 2** recalcula `repeticiones`, `facilidad` (mínimo `1.3`) e `intervalo_dias`, y programa `proximo_repaso` en la base de datos. Con `TUTOR_MINUTOS_POR_DIA=1`, un «día» de repaso dura 1 minuto para demostrar el retorno de temas en clase.
 5. **Interoperabilidad por MCP (`app/mcp_tools.py`)**: La misma memoria persistente queda expuesta como servidor MCP tanto en modo remoto (**Streamable HTTP** en `/mcp`) como en modo local (**stdio** con `python -m app.mcp_tools`), compartiendo el mismo estado con la web.
 6. **Disponibilidad 24/7 en Render + GitHub Actions (`render.yaml` + `.github/workflows/despertador.yml`)**: En Render se despliega el servicio web conectado a una base **PostgreSQL** (`tutor-memoria`), y el flujo programado de GitHub Actions visita `GET /health` cada 10 minutos para evitar que el plan gratuito suspenda el contenedor tras 15 minutos de inactividad.
 
@@ -115,12 +115,13 @@ El archivo `render.yaml` define el Blueprint completo (`agente-tutor-persistente
 
 ## Cómo conectar Claude Desktop o Claude Code por MCP
 
-El agente expone **8 herramientas MCP** sobre la misma base de datos que la interfaz web:
+El agente expone **9 herramientas MCP** sobre la misma base de datos que la interfaz web:
 
 | Herramienta | Propósito |
 |---|---|
 | `agregar_tema` | Registra un tema propio (`nombre`, `notas`) para el próximo ciclo autónomo. |
-| `ver_preguntas_pendientes` | Lista las preguntas pendientes sin revelar la respuesta esperada. |
+| `ver_preguntas_pendientes` | Lista las preguntas pendientes (incluyendo `requiere_lectura` y `lectura` si aplica) sin revelar la respuesta esperada. |
+| `marcar_tarjeta_leida` | Marca una tarjeta nueva como leída (`pregunta_id`) para habilitar su pregunta. |
 | `responder_pregunta` | Envía la respuesta de la persona (`pregunta_id`, `respuesta`) y recalcula SM-2. |
 | `ver_mazos` | Lista las 42 categorías de DevCards con conteo de tarjetas y estado activo. |
 | `activar_mazo` | Activa o pausa una categoría DevCards por su nombre exacto. |
@@ -175,6 +176,7 @@ Para clientes locales como **Claude Desktop**, añade una entrada en `claude_des
 | `TUTOR_MINUTOS_POR_DIA` | `1440` | Duración en minutos de un «día» SM-2 (`1440` = tiempo real; `1` = modo demo en vivo). |
 | `TUTOR_MAX_PENDIENTES` | `3` | Máximo de preguntas pendientes simultáneas que genera el agente. |
 | `TUTOR_NUEVAS_POR_DIA` | `5` | Límite de tarjetas DevCards nuevas introducidas por «día» de estudio. |
+| `TUTOR_LEER_ANTES` | `1` | Exige leer la ficha de la DevCard nueva antes de responder (`0` desactiva este modo). |
 | `TUTOR_TOKEN` | `""` | Clave opcional exigida en `X-Tutor-Token` o `Authorization: Bearer` para rutas de escritura y `/mcp`. |
 | `TUTOR_AUTONOMO` | `1` | Pon `"0"` para desactivar el hilo autónomo en pruebas o entornos controlados. |
 

@@ -22,6 +22,8 @@ from sqlalchemy import (
     Text,
     create_engine,
     func,
+    inspect,
+    text,
     select,
     update,
 )
@@ -59,6 +61,8 @@ preguntas = Table(
     Column("fuente", String(20), nullable=False, default="local"),  # gemini | local | devcards
     Column("opciones", Text),  # JSON con las opciones si es de opción múltiple
     Column("explicacion", Text, nullable=False, default=""),  # idea clave que se muestra al corregir
+    Column("requiere_lectura", Integer, nullable=False, default=0),  # 1: DevCard nueva que se lee antes del quiz
+    Column("leida_en", DateTime(timezone=True)),  # cuándo la persona marcó la tarjeta como leída
     Column("creada", DateTime(timezone=True), nullable=False),
     Column("respondida_en", DateTime(timezone=True)),
 )
@@ -121,6 +125,8 @@ def _fila(row: Any) -> dict[str, Any]:
             datos[k] = _utc(v)
     if "opciones" in datos:
         datos["opciones"] = json.loads(datos["opciones"]) if datos["opciones"] else None
+    if "requiere_lectura" in datos:  # solo "requiere" mientras no se haya marcado como leída
+        datos["requiere_lectura"] = bool(datos["requiere_lectura"]) and datos.get("leida_en") is None
     return datos
 
 
@@ -131,6 +137,27 @@ class Memoria:
             kwargs["connect_args"] = {"check_same_thread": False}
         self.engine: Engine = create_engine(url, **kwargs)
         metadata.create_all(self.engine)
+        self._migrar()
+
+    # Columnas añadidas después de la v1.0. create_all() no altera tablas que ya existen, así que una base
+    # que ya está en uso (la de Render) recibe aquí las columnas nuevas sin perder ningún dato.
+    _COLUMNAS_NUEVAS = {
+        "preguntas": {
+            "requiere_lectura": "INTEGER NOT NULL DEFAULT 0",
+            "leida_en": {"postgresql": "TIMESTAMP WITH TIME ZONE", "default": "TIMESTAMP"},
+        },
+    }
+
+    def _migrar(self) -> None:
+        dialecto = self.engine.dialect.name
+        existentes = {t: {c["name"] for c in inspect(self.engine).get_columns(t)} for t in self._COLUMNAS_NUEVAS}
+        with self.engine.begin() as c:
+            for tabla, columnas in self._COLUMNAS_NUEVAS.items():
+                for nombre, tipo in columnas.items():
+                    if nombre in existentes[tabla]:
+                        continue
+                    ddl = tipo if isinstance(tipo, str) else tipo.get(dialecto, tipo["default"])
+                    c.execute(text(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {ddl}"))
 
     # ---- latido: demuestra la persistencia entre reinicios -------------------
     def registrar_arranque(self) -> dict[str, Any]:
@@ -206,7 +233,7 @@ class Memoria:
     # ---- preguntas y respuestas ---------------------------------------------
     def crear_pregunta(
         self, tema_id: int, texto: str, esperada: str, motivo: str, fuente: str,
-        opciones: Optional[list[str]] = None, explicacion: str = "",
+        opciones: Optional[list[str]] = None, explicacion: str = "", requiere_lectura: bool = False,
     ) -> dict[str, Any]:
         with self.engine.begin() as c:
             pid = c.execute(
@@ -214,6 +241,7 @@ class Memoria:
                     tema_id=tema_id, texto=texto, respuesta_esperada=esperada, motivo=motivo,
                     estado="pendiente", fuente=fuente, creada=ahora(),
                     opciones=json.dumps(opciones, ensure_ascii=False) if opciones else None, explicacion=explicacion,
+                    requiere_lectura=1 if requiere_lectura else 0,
                 )
             ).inserted_primary_key[0]
         return self.obtener_pregunta(int(pid))  # type: ignore[return-value]
@@ -221,7 +249,7 @@ class Memoria:
     def obtener_pregunta(self, pregunta_id: int) -> Optional[dict[str, Any]]:
         with self.engine.connect() as c:
             fila = c.execute(
-                select(preguntas, temas.c.nombre.label("tema"))
+                select(preguntas, temas.c.nombre.label("tema"), temas.c.ref_externa)
                 .join(temas, temas.c.id == preguntas.c.tema_id)
                 .where(preguntas.c.id == pregunta_id)
             ).first()
@@ -230,12 +258,26 @@ class Memoria:
     def pendientes(self) -> list[dict[str, Any]]:
         with self.engine.connect() as c:
             filas = c.execute(
-                select(preguntas, temas.c.nombre.label("tema"))
+                select(preguntas, temas.c.nombre.label("tema"), temas.c.ref_externa)
                 .join(temas, temas.c.id == preguntas.c.tema_id)
                 .where(preguntas.c.estado == "pendiente")
                 .order_by(preguntas.c.creada)
             )
             return [_fila(f) for f in filas]
+
+    def marcar_leida(self, pregunta_id: int) -> datetime:
+        """Idempotente: si ya estaba leída, devuelve la fecha original."""
+        with self.engine.begin() as c:
+            fila = c.execute(select(preguntas.c.estado, preguntas.c.leida_en).where(preguntas.c.id == pregunta_id)).first()
+            if fila is None:
+                raise LookupError("No existe esa pregunta")
+            if fila.estado != "pendiente":
+                raise ValueError("La pregunta ya fue respondida")
+            if fila.leida_en is not None:
+                return _utc(fila.leida_en)  # type: ignore[return-value]
+            t = ahora()
+            c.execute(update(preguntas).where(preguntas.c.id == pregunta_id).values(leida_en=t))
+            return t
 
     def registrar_respuesta(self, pregunta_id: int, texto: str, nota: int, retro: str) -> dict[str, Any]:
         t = ahora()

@@ -11,6 +11,7 @@
   let accionPendiente = null;
   let temporizadorAviso = null;
   let recargaEnCurso = false;
+  const leidasLocalmente = new Set();
 
   const formatoFechaHora = new Intl.DateTimeFormat("es", {
     day: "2-digit",
@@ -375,24 +376,114 @@
     }
   }
 
-  function crearTarjetaPregunta(p) {
-    const art = crear("article", "tarjeta-pregunta");
-    art.dataset.preguntaId = String(p.id);
+  function esModoLectura(p) {
+    return Boolean(p && p.requiere_lectura && p.lectura && !leidasLocalmente.has(String(p.id)));
+  }
 
+  async function marcarTarjetaLeida(p, art, btn) {
+    if (btn) btn.disabled = true;
+    if (art) art.dataset.enviando = "1";
+    try {
+      await peticion(
+        `/api/preguntas/${p.id}/leida`,
+        { method: "POST" },
+        () => marcarTarjetaLeida(p, art, btn)
+      );
+      leidasLocalmente.add(String(p.id));
+      p.requiere_lectura = false;
+      if (art) {
+        delete art.dataset.enviando;
+        rellenarTarjetaPregunta(art, p, true);
+      }
+      mostrarAvisoGlobal("Tarjeta leída. Ya puedes responder la pregunta.");
+    } catch (err) {
+      if (art) delete art.dataset.enviando;
+      if (btn) btn.disabled = false;
+      if (err.status !== 401) {
+        mostrarAvisoGlobal(err.message || "No se pudo marcar la tarjeta como leída.", true);
+      }
+    }
+  }
+
+  function rellenarTarjetaLectura(art, p) {
+    const lec = p.lectura || {};
+    art.dataset.modo = "lectura";
+    art.className = "tarjeta-pregunta tarjeta-lectura";
+
+    const hijos = [];
+    const cab = crear("div", "lectura-cabecera");
+    cab.appendChild(crear("span", "pildora pildora-azul", "Lectura previa"));
+    if (lec.categoria) {
+      cab.appendChild(crear("span", "pildora pildora-ok", lec.categoria));
+    }
+    if (lec.dificultad) {
+      cab.appendChild(crear("span", "pildora pildora-neutra", lec.dificultad));
+    }
+    hijos.push(cab);
+
+    if (p.motivo) {
+      hijos.push(crear("p", "pregunta-motivo", `Por qué te la presento: ${p.motivo}`));
+    }
+
+    hijos.push(crear("h3", "lectura-titulo", lec.titulo || p.tema || `Tarjeta #${p.tema_id}`));
+
+    if (lec.definicion) {
+      hijos.push(crear("p", "lectura-definicion", lec.definicion));
+    }
+
+    if (lec.analogia) {
+      const bloqueAnalogia = crear("div", "lectura-bloque lectura-analogia");
+      bloqueAnalogia.appendChild(crear("span", "lectura-etiqueta", "Piénsalo así"));
+      bloqueAnalogia.appendChild(crear("p", "lectura-cuerpo", lec.analogia));
+      hijos.push(bloqueAnalogia);
+    }
+
+    if (lec.codigo) {
+      const pre = crear("pre", "lectura-codigo");
+      pre.appendChild(crear("code", "", lec.codigo));
+      hijos.push(pre);
+    }
+
+    if (lec.idea_clave) {
+      const bloqueIdea = crear("div", "lectura-bloque lectura-idea-clave");
+      bloqueIdea.appendChild(crear("span", "lectura-etiqueta", "Idea clave"));
+      bloqueIdea.appendChild(crear("p", "lectura-cuerpo", lec.idea_clave));
+      hijos.push(bloqueIdea);
+    }
+
+    const acciones = crear("div", "lectura-acciones");
+    const btn = crear("button", "btn btn-primario btn-ya-lei", "Ya la leí, hazme la pregunta");
+    btn.type = "button";
+    btn.addEventListener("click", () => {
+      marcarTarjetaLeida(p, art, btn);
+    });
+    acciones.appendChild(btn);
+    hijos.push(acciones);
+
+    art.replaceChildren(...hijos);
+  }
+
+  function rellenarTarjetaPregunta(art, p, enfocarPregunta = false) {
+    art.dataset.modo = "pregunta";
+    art.className = "tarjeta-pregunta";
+
+    const hijos = [];
     const cab = crear("div", "pregunta-cabecera");
     cab.appendChild(crear("span", "pregunta-tema", p.tema || `Tema #${p.tema_id}`));
     const fInfo = formatearFuente(p.fuente);
     cab.appendChild(crear("span", fInfo.clase, fInfo.texto));
-    art.appendChild(cab);
+    hijos.push(cab);
 
     if (p.motivo) {
-      art.appendChild(crear("p", "pregunta-motivo", `Por qué te lo pregunto: ${p.motivo}`));
+      hijos.push(crear("p", "pregunta-motivo", `Por qué te lo pregunto: ${p.motivo}`));
     }
 
-    art.appendChild(crear("p", "pregunta-texto", p.texto));
+    const pTexto = crear("p", "pregunta-texto", p.texto);
+    pTexto.tabIndex = -1;
+    hijos.push(pTexto);
 
     if (Array.isArray(p.opciones) && p.opciones.length > 0) {
-      art.appendChild(crear("p", "opciones-titulo", "Elige una opción:"));
+      hijos.push(crear("p", "opciones-titulo", "Elige una opción:"));
       const grid = crear("div", "opciones-grid");
       p.opciones.forEach((opcionTexto, idx) => {
         const letra = LETRAS[idx] || String(idx + 1);
@@ -406,7 +497,7 @@
         });
         grid.appendChild(btn);
       });
-      art.appendChild(grid);
+      hijos.push(grid);
     } else {
       const form = crear("form", "form-respuesta");
       const inputId = `resp-preg-${p.id}`;
@@ -437,9 +528,23 @@
         }
         enviarRespuesta(p.id, valor, art);
       });
-      art.appendChild(form);
+      hijos.push(form);
     }
 
+    art.replaceChildren(...hijos);
+    if (enfocarPregunta) {
+      enfocar(pTexto);
+    }
+  }
+
+  function crearTarjetaPregunta(p) {
+    const art = crear("article", "tarjeta-pregunta");
+    art.dataset.preguntaId = String(p.id);
+    if (esModoLectura(p)) {
+      rellenarTarjetaLectura(art, p);
+    } else {
+      rellenarTarjetaPregunta(art, p, false);
+    }
     return art;
   }
 
@@ -466,8 +571,13 @@
 
     for (const p of pendientes) {
       const idStr = String(p.id);
-      if (!cont.querySelector(`[data-pregunta-id="${idStr}"]`)) {
+      const existente = cont.querySelector(`[data-pregunta-id="${idStr}"]`);
+      if (!existente) {
         cont.appendChild(crearTarjetaPregunta(p));
+      } else if (existente.dataset.enviando !== "1") {
+        if (existente.dataset.modo === "lectura" && !esModoLectura(p)) {
+          rellenarTarjetaPregunta(existente, p, false);
+        }
       }
     }
   }

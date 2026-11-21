@@ -97,3 +97,26 @@ def test_mcp_remoto_exige_token_y_lista_herramientas(cliente) -> None:
                                                      "arguments": {"nombre": "MCP", "notas": "Protocolo de contexto."}}, 3), headers=h)
     assert llamada.status_code == 200 and not llamada.json()["result"].get("isError"), llamada.text
     assert any(t["nombre"] == "MCP" for t in c.get("/api/temas").json())
+
+
+def test_modo_lectura_por_api(cliente) -> None:
+    c, _ = cliente
+    c.put("/api/mazos/POO", json={"activo": True}, headers=H)
+    c.post("/api/ciclo", headers=H)
+    p = c.get("/api/preguntas/pendientes").json()[0]
+    assert p["requiere_lectura"] is True and p["lectura"]["definicion"]
+    assert c.post(f"/api/preguntas/{p['id']}/responder", json={"respuesta": "A"}, headers=H).status_code == 409
+    assert c.post(f"/api/preguntas/{p['id']}/leida").status_code == 401  # escribe: exige token
+    assert c.post(f"/api/preguntas/{p['id']}/leida", headers=H).status_code == 200
+    assert c.post(f"/api/preguntas/{p['id']}/leida", headers=H).status_code == 200  # idempotente
+    despues = c.get("/api/preguntas/pendientes").json()[0]
+    assert despues["requiere_lectura"] is False and despues["lectura"] is None
+    assert c.post(f"/api/preguntas/{p['id']}/responder", json={"respuesta": "A"}, headers=H).status_code == 200
+    assert c.post("/api/preguntas/999/leida", headers=H).status_code == 404
+
+
+def test_forzar_ciclo_no_revela_la_respuesta(cliente) -> None:
+    c, _ = cliente
+    c.post("/api/temas", json={"nombre": "Redes", "notas": "TCP garantiza la entrega ordenada de los paquetes."}, headers=H)
+    creadas = c.post("/api/ciclo", headers=H).json()["preguntas_creadas"]
+    assert creadas and all("respuesta_esperada" not in p for p in creadas)

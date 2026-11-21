@@ -175,6 +175,7 @@ def test_opcion_multiple_acepta_letra_numero_o_texto(tmp_path: Path, forma: str)
     a = _agente(tmp_path, nuevas_por_dia=1)
     a.activar_mazo("POO", True)
     p = a.ciclo()["preguntas_creadas"][0]
+    a.marcar_leida(p["id"])  # DevCard nueva: se lee antes del quiz
     i = p["opciones"].index(p["respuesta_esperada"])
     resp = {"letra": "ABCD"[i], "numero": str(i + 1), "texto": p["respuesta_esperada"].upper()}[forma]
     r = a.responder(p["id"], resp)
@@ -185,6 +186,7 @@ def test_opcion_multiple_incorrecta(tmp_path: Path) -> None:
     a = _agente(tmp_path, nuevas_por_dia=1)
     a.activar_mazo("POO", True)
     p = a.ciclo()["preguntas_creadas"][0]
+    a.marcar_leida(p["id"])  # DevCard nueva: se lee antes del quiz
     i = p["opciones"].index(p["respuesta_esperada"])
     r = a.responder(p["id"], "ABCD"[(i + 1) % len(p["opciones"])])
     assert r["nota"] == 1 and "Incorrecto" in r["retroalimentacion"]
@@ -237,3 +239,62 @@ def test_tema_duplicado_rechazado(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         m.crear_tema("sql", "y")
     m.crear_tema("SQL", "z", origen="devcards", ref_externa="sql-1")  # una DevCard puede llamarse igual
+
+
+# ---- modo "leer antes de responder" (v1.1) --------------------------------------
+def test_devcard_nueva_exige_lectura_y_el_repaso_no(tmp_path: Path) -> None:
+    a = _agente(tmp_path, nuevas_por_dia=1, minutos_por_dia=1)
+    a.activar_mazo("POO", True)
+    p = a.ciclo()["preguntas_creadas"][0]
+    assert p["requiere_lectura"] is True
+    lectura = a.lectura_de(a.memoria.obtener_pregunta(p["id"]))
+    assert lectura and lectura["definicion"] and lectura["idea_clave"] and "titulo" in lectura
+    with pytest.raises(ValueError, match="Primero lee"):
+        a.responder(p["id"], "A")
+    primera = a.marcar_leida(p["id"])
+    assert a.marcar_leida(p["id"])["leida_en"] == primera["leida_en"]  # idempotente
+    assert a.lectura_de(a.memoria.obtener_pregunta(p["id"])) is None
+    assert sum("Leíste la DevCard" in b["detalle"] for b in a.memoria.leer_bitacora()) == 1
+    a.responder(p["id"], p["respuesta_esperada"])
+    with pytest.raises(ValueError):
+        a.marcar_leida(p["id"])  # ya respondida
+    with pytest.raises(LookupError):
+        a.marcar_leida(9999)
+    tema = a.memoria.obtener_tema(p["tema_id"])  # forzar que el repaso venza ya
+    a.memoria.actualizar_repaso(tema["id"], 1, 1, 2.5, ahora() - timedelta(seconds=1), acierto=True)
+    repaso = a.ciclo()["preguntas_creadas"][0]
+    assert repaso["tema_id"] == p["tema_id"] and repaso["requiere_lectura"] is False
+
+
+def test_modo_lectura_desactivable_y_temas_propios_no_lo_usan(tmp_path: Path) -> None:
+    a = _agente(tmp_path, nuevas_por_dia=1, leer_antes=False)
+    a.activar_mazo("POO", True)
+    assert a.ciclo()["preguntas_creadas"][0]["requiere_lectura"] is False
+    (tmp_path / "otro").mkdir()
+    b = _agente(tmp_path / "otro", nuevas_por_dia=0)
+    b.agregar_tema("Fotosíntesis", NOTAS)
+    assert b.ciclo()["preguntas_creadas"][0]["requiere_lectura"] is False
+
+
+def test_migracion_agrega_columnas_a_una_base_v1_sin_perder_datos(tmp_path: Path) -> None:
+    import sqlalchemy as sa
+
+    url = f"sqlite:///{tmp_path / 'v1.db'}"
+    motor = sa.create_engine(url)
+    with motor.begin() as c:  # esquema exacto de la v1.0 (sin requiere_lectura ni leida_en)
+        c.execute(sa.text("CREATE TABLE temas (id INTEGER PRIMARY KEY, nombre VARCHAR(200) NOT NULL, notas TEXT NOT NULL, "
+                          "origen VARCHAR(20) NOT NULL, categoria VARCHAR(120) NOT NULL, ref_externa VARCHAR(60) UNIQUE, "
+                          "repeticiones INTEGER NOT NULL, intervalo_dias FLOAT NOT NULL, facilidad FLOAT NOT NULL, "
+                          "proximo_repaso DATETIME NOT NULL, aciertos INTEGER NOT NULL, fallos INTEGER NOT NULL, creado DATETIME NOT NULL)"))
+        c.execute(sa.text("CREATE TABLE preguntas (id INTEGER PRIMARY KEY, tema_id INTEGER NOT NULL, texto TEXT NOT NULL, "
+                          "respuesta_esperada TEXT NOT NULL, motivo TEXT NOT NULL, estado VARCHAR(20) NOT NULL, "
+                          "fuente VARCHAR(20) NOT NULL, opciones TEXT, explicacion TEXT NOT NULL, creada DATETIME NOT NULL, respondida_en DATETIME)"))
+        c.execute(sa.text("INSERT INTO temas VALUES (1,'Viejo','notas','usuario','',NULL,0,0,2.5,'2026-01-01 00:00:00',0,0,'2026-01-01 00:00:00')"))
+        c.execute(sa.text("INSERT INTO preguntas VALUES (1,1,'¿Pregunta vieja?','resp','m','pendiente','local',NULL,'','2026-01-01 00:00:00',NULL)"))
+    motor.dispose()
+    m = Memoria(url)  # al abrirla, migra
+    columnas = {c["name"] for c in sa.inspect(m.engine).get_columns("preguntas")}
+    assert {"requiere_lectura", "leida_en"} <= columnas
+    vieja = m.pendientes()[0]
+    assert vieja["texto"] == "¿Pregunta vieja?" and vieja["requiere_lectura"] is False
+    Memoria(url)  # una segunda apertura no vuelve a migrar ni falla

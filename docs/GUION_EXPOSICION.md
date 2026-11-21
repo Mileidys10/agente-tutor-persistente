@@ -29,11 +29,12 @@ Este guion está pensado para presentar **Agente Tutor Persistente** en clase co
 1. En **«Mis temas»**, escribe rápido un tema propio (por ejemplo: *«Índices B-Tree»* con la nota *«Aceleran búsquedas por rango y mantienen las claves ordenadas»*) y pulsa **«Agregar tema»**.
 2. En **«Mazos DevCards»**, busca una categoría (por ejemplo *«SQL»* o *«Python»*) y pulsa su interruptor para dejarla en **«Activo»**.
 3. Señala la bitácora y pulsa **«Ejecutar un ciclo ahora»** (o deja que el reloj automático complete el siguiente ciclo en pantalla).
+4. En la tarjeta DevCard nueva recién creada, muestra primero la ficha de lectura (definición, *«Piénsalo así»*, código e idea clave) y pulsa **«Ya la leí, hazme la pregunta»** para pasar al instante a la pregunta.
 
 **Qué decir**:
 > «Acabo de darle un tema propio y activar un mazo del banco integrado de **1 295 tarjetas DevCards** en 42 categorías. Si observan sin que yo pregunte nada, el hilo autónomo despierta cada pocos segundos, revisa qué temas están vencidos y cuántos huecos quedan disponibles.
 >
-> Al ejecutarse el ciclo, en la sección **Estudiar** aparece la pregunta y, justo encima, la razón explícita por la que el agente la eligió hoy. Abajo, en la **Bitácora del agente**, queda registrada la decisión con su hora exacta.»
+> Al ejecutarse el ciclo, las DevCards nuevas activan el modo **leer antes de responder**: primero muestran la ficha de estudio con definición, analogía (*"Piénsalo así"*), código de ejemplo e idea clave. Al pulsar **"Ya la leí, hazme la pregunta"**, esa misma tarjeta pasa de inmediato a evaluarte —sin recargar la página— y en los siguientes repasos ya va directo a la pregunta. Abajo, en la **Bitácora del agente**, queda registrada cada decisión con su hora exacta.»
 
 ---
 

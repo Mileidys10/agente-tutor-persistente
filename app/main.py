@@ -118,7 +118,11 @@ def temas() -> list[dict[str, Any]]:
 @app.get("/api/preguntas/pendientes")
 def pendientes() -> list[dict[str, Any]]:
     return [
-        {k: p[k] for k in ("id", "tema_id", "tema", "texto", "opciones", "motivo", "fuente", "creada")}
+        {
+            **{k: p[k] for k in ("id", "tema_id", "tema", "texto", "opciones", "motivo", "fuente", "creada")},
+            "requiere_lectura": bool(p.get("requiere_lectura")),
+            "lectura": agente.lectura_de(p),
+        }
         for p in agente.memoria.pendientes()
     ]
 
@@ -170,6 +174,16 @@ def responder(pregunta_id: int, body: Respuesta) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.post("/api/preguntas/{pregunta_id}/leida", dependencies=[Depends(exigir_token)])
+def marcar_leida(pregunta_id: int) -> dict[str, Any]:
+    try:
+        return agente.marcar_leida(pregunta_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.put("/api/mazos/{categoria}", dependencies=[Depends(exigir_token)])
 def cambiar_mazo(categoria: str, body: MazoCambio) -> dict[str, Any]:
     try:
@@ -182,7 +196,13 @@ def cambiar_mazo(categoria: str, body: MazoCambio) -> dict[str, Any]:
 @app.post("/api/ciclo", dependencies=[Depends(exigir_token)])
 def forzar_ciclo() -> dict[str, Any]:
     """Para la exposición: ejecuta un ciclo del agente ya, sin esperar al temporizador."""
-    return agente.ciclo()
+    res = agente.ciclo()
+    # Igual que en /pendientes: la respuesta esperada nunca sale antes de que la persona conteste.
+    res["preguntas_creadas"] = [
+        {k: p[k] for k in ("id", "tema_id", "texto", "opciones", "motivo", "fuente", "creada")}
+        for p in res["preguntas_creadas"]
+    ]
+    return res
 
 
 @app.get("/api/acceso", dependencies=[Depends(exigir_token)])
