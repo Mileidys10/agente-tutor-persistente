@@ -93,6 +93,8 @@ La aplicación queda escuchando en `http://localhost:8001` (puerto configurable 
 
 ## Cómo desplegarlo en Render paso a paso
 
+> ¿Primera vez desplegando en Render? Consulta la **[guía paso a paso para principiantes](docs/GUIA_RENDER.md)** (desde crear la cuenta hasta activar el despertador y comprobar el reinicio en clase).
+
 El archivo `render.yaml` define el Blueprint completo (`agente-tutor-persistente` + base PostgreSQL `tutor-memoria`):
 
 1. Sube este repositorio a tu cuenta de GitHub.
