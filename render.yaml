@@ -1,0 +1,29 @@
+# Blueprint de Render: un servicio web gratis + PostgreSQL gratis (la memoria del agente).
+# En Render: New > Blueprint > elige este repositorio. Solo pedirá GEMINI_API_KEY (opcional).
+services:
+  - type: web
+    name: agente-tutor-persistente
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tutor-memoria
+          property: connectionString
+      - key: TUTOR_TOKEN          # clave de acceso para responder y agregar temas; Render la genera
+        generateValue: true
+      - key: GEMINI_API_KEY       # opcional: sin ella el agente usa su motor local
+        sync: false
+      - key: TUTOR_MINUTOS_POR_DIA  # modo demo: 1 "día" de repaso = 1 minuto. Para uso real: 1440
+        value: "1"
+      - key: TUTOR_INTERVALO_S
+        value: "20"
+
+databases:
+  - name: tutor-memoria
+    plan: free

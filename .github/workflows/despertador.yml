@@ -1,0 +1,20 @@
+# El plan gratis de Render duerme el servicio tras 15 min sin visitas.
+# Este "despertador" lo visita cada 10 min para que el agente siga vivo trabajando.
+# Configura la variable del repositorio TUTOR_URL (Settings > Secrets and variables > Actions > Variables).
+name: despertador
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  latido:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Visitar /health
+        env:
+          TUTOR_URL: ${{ vars.TUTOR_URL }}
+        run: |
+          if [ -z "$TUTOR_URL" ]; then echo "TUTOR_URL no configurada; nada que despertar."; exit 0; fi
+          curl -fsS --retry 3 --retry-delay 20 --max-time 90 "$TUTOR_URL/health"

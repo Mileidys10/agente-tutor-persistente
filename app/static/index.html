@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agente Tutor Persistente</title>
+  <link rel="stylesheet" href="/static/estilos.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#principal">Saltar al contenido principal</a>
+
+  <header class="cabecera">
+    <div class="contenedor cabecera-interior">
+      <div class="cabecera-superior">
+        <div class="identidad">
+          <div class="fila-titulo">
+            <h1>Agente Tutor Persistente</h1>
+            <span id="estado-vida" class="pildora pildora-neutra">Conectando...</span>
+          </div>
+          <p id="frase-despertar" class="frase-despertar">Desperté — veces y recuerdo todo</p>
+        </div>
+
+        <div class="cabecera-acciones">
+          <button type="button" id="btn-ciclo" class="btn btn-primario">Ejecutar un ciclo ahora</button>
+          <button type="button" id="btn-token" class="btn btn-secundario">Clave de acceso</button>
+        </div>
+      </div>
+
+      <dl class="metricas-agente" aria-label="Estado técnico del agente">
+        <div class="metrica-item">
+          <dt>Ciclos</dt>
+          <dd id="stat-ciclos">—</dd>
+        </div>
+        <div class="metrica-item">
+          <dt>Último ciclo</dt>
+          <dd id="stat-ultimo-ciclo">—</dd>
+        </div>
+        <div class="metrica-item">
+          <dt>Cerebro</dt>
+          <dd id="stat-cerebro">—</dd>
+        </div>
+        <div class="metrica-item">
+          <dt>Memoria</dt>
+          <dd id="stat-bd">—</dd>
+        </div>
+        <div class="metrica-item">
+          <dt>Ritmo</dt>
+          <dd id="stat-ritmo">—</dd>
+        </div>
+      </dl>
+
+      <nav class="nav-secciones" aria-label="Secciones de la página">
+        <a href="#seccion-estudiar">Estudiar</a>
+        <a href="#seccion-temas">Mis temas</a>
+        <a href="#seccion-mazos">Mazos DevCards</a>
+        <a href="#seccion-progreso">Progreso</a>
+        <a href="#seccion-bitacora">Bitácora</a>
+      </nav>
+
+      <p id="aviso-global" class="aviso-global" role="status" aria-live="polite" hidden></p>
+    </div>
+  </header>
+
+  <main id="principal" class="contenedor rejilla-principal">
+    <!-- 1. ESTUDIAR -->
+    <section id="seccion-estudiar" class="panel panel-destacado" aria-labelledby="titulo-estudiar">
+      <div class="panel-cabecera">
+        <h2 id="titulo-estudiar">Estudiar</h2>
+        <span id="badge-pendientes" class="pildora pildora-azul">0 pendientes</span>
+      </div>
+
+      <div id="resultado-respuesta" class="resultado-respuesta" aria-live="polite" hidden></div>
+
+      <div id="lista-preguntas" class="lista-preguntas">
+        <p class="estado-vacio">Cargando preguntas pendientes...</p>
+      </div>
+    </section>
+
+    <!-- 2. PROGRESO -->
+    <section id="seccion-progreso" class="panel" aria-labelledby="titulo-progreso">
+      <div class="panel-cabecera">
+        <h2 id="titulo-progreso">Progreso</h2>
+        <span class="subtitulo-panel">Repetición espaciada SM-2</span>
+      </div>
+
+      <dl class="rejilla-progreso" aria-label="Resumen de aprendizaje">
+        <div class="kpi-caja">
+          <dt>Temas</dt>
+          <dd id="prog-temas">0</dd>
+        </div>
+        <div class="kpi-caja">
+          <dt>Dominados</dt>
+          <dd id="prog-dominados">0</dd>
+        </div>
+        <div class="kpi-caja">
+          <dt>Respuestas</dt>
+          <dd id="prog-respuestas">0</dd>
+        </div>
+        <div class="kpi-caja">
+          <dt>Aciertos</dt>
+          <dd id="prog-porcentaje">—</dd>
+        </div>
+      </dl>
+
+      <div class="subbloques-progreso">
+        <div>
+          <h3 class="subtitulo-lista">Temas más difíciles</h3>
+          <ul id="lista-dificiles" class="lista-compacta">
+            <li class="texto-suave">Todavía no hay fallos registrados.</li>
+          </ul>
+        </div>
+        <div>
+          <h3 class="subtitulo-lista">Últimas evaluaciones</h3>
+          <ul id="lista-historial" class="lista-compacta">
+            <li class="texto-suave">Sin respuestas evaluadas todavía.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. MIS TEMAS -->
+    <section id="seccion-temas" class="panel" aria-labelledby="titulo-temas">
+      <div class="panel-cabecera">
+        <h2 id="titulo-temas">Mis temas</h2>
+        <span id="badge-temas" class="pildora pildora-neutra">0 temas</span>
+      </div>
+
+      <form id="form-tema" class="formulario-tema">
+        <div class="campo">
+          <label for="tema-nombre">Nombre del tema</label>
+          <input id="tema-nombre" name="nombre" type="text" minlength="2" maxlength="200" required
+                 placeholder="Ej. Índices B-Tree en PostgreSQL">
+        </div>
+        <div class="campo">
+          <label for="tema-notas">Notas de estudio</label>
+          <textarea id="tema-notas" name="notas" rows="3" maxlength="8000"
+                    placeholder="Escribe definiciones o puntos clave. El agente usará estas notas para preguntarte."></textarea>
+        </div>
+        <div class="fila-acciones-form">
+          <button type="submit" id="btn-agregar-tema" class="btn btn-primario">Agregar tema</button>
+          <p id="estado-form-tema" class="estado-inline" role="status" aria-live="polite"></p>
+        </div>
+      </form>
+
+      <div id="lista-temas" class="lista-temas">
+        <p class="estado-vacio">Cargando temas...</p>
+      </div>
+    </section>
+
+    <!-- 4. MAZOS DEVCARDS -->
+    <section id="seccion-mazos" class="panel" aria-labelledby="titulo-mazos">
+      <div class="panel-cabecera">
+        <h2 id="titulo-mazos">Mazos DevCards</h2>
+        <span id="resumen-mazos" class="subtitulo-panel">Cargando banco...</span>
+      </div>
+
+      <div class="campo campo-busqueda">
+        <label for="filtro-mazos">Filtrar categorías</label>
+        <input id="filtro-mazos" type="search" placeholder="Buscar por nombre (ej. Python, SQL, Docker)...">
+      </div>
+
+      <div id="lista-mazos" class="lista-mazos">
+        <p class="estado-vacio">Cargando mazos...</p>
+      </div>
+    </section>
+
+    <!-- 5. BITÁCORA DEL AGENTE -->
+    <section id="seccion-bitacora" class="panel panel-ancho" aria-labelledby="titulo-bitacora">
+      <div class="panel-cabecera">
+        <h2 id="titulo-bitacora">Bitácora del agente</h2>
+        <span class="subtitulo-panel">Registro autónomo persistente (más reciente primero)</span>
+      </div>
+
+      <ul id="lista-bitacora" class="lista-bitacora">
+        <li class="estado-vacio">Cargando bitácora...</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="pie">
+    <div class="contenedor pie-interior">
+      <p>
+        Agente Tutor Persistente · Repetición espaciada SM-2 · Banco
+        <span id="pie-devcards">1 295</span> DevCards (MIT).
+      </p>
+      <p class="pie-enlaces">
+        <a href="/privacidad">Privacidad</a>
+        <span aria-hidden="true">·</span>
+        <a href="/docs" target="_blank" rel="noopener noreferrer">Documentación API</a>
+      </p>
+    </div>
+  </footer>
+
+  <dialog id="dialogo-token" class="dialogo-token" aria-labelledby="titulo-token">
+    <form id="form-token" class="dialogo-cuerpo" method="dialog">
+      <h2 id="titulo-token">Clave de acceso</h2>
+      <p id="desc-token" class="texto-suave">
+        Si el servidor tiene configurada la variable TUTOR_TOKEN, introduce la clave para agregar temas, responder o activar mazos.
+      </p>
+      <div class="campo">
+        <label for="input-token">Clave (X-Tutor-Token)</label>
+        <input id="input-token" type="password" autocomplete="current-password" placeholder="Pega aquí tu clave">
+      </div>
+      <p id="error-token" class="mensaje-error" role="alert" hidden></p>
+      <div class="dialogo-botones">
+        <button type="submit" id="btn-guardar-token" class="btn btn-primario">Verificar y guardar</button>
+        <button type="button" id="btn-limpiar-token" class="btn btn-secundario">Borrar clave guardada</button>
+        <button type="button" id="btn-cerrar-token" class="btn btn-terciario">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>
