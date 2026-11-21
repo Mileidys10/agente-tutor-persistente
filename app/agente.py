@@ -1,3 +1,6 @@
+# Archivo app/agente.py: coordina todo el comportamiento autónomo del tutor.
+# Conecta Memoria (base de datos), Cerebro (Gemini/local), BancoDevCards (1 295 tarjetas) y SM-2.
+# Tanto la API web (app/main.py) como el servidor MCP (app/mcp_tools.py) llaman a esta clase.
 """AgenteTutor: el agente persistente.
 
 Ciclo autónomo (cada TUTOR_INTERVALO_S segundos, en un hilo de fondo):
@@ -27,6 +30,7 @@ log = logging.getLogger("tutor.agente")
 LATIDO_BITACORA_CADA = 20  # ciclos sin novedades entre dos anotaciones de "sigo vivo"
 
 
+# Convierte una cantidad de minutos en texto legible en español ("hace 5 min") para los motivos y la bitácora.
 def _hace(minutos: float) -> str:
     if minutos < 1:
         return "hace menos de un minuto"
@@ -37,7 +41,9 @@ def _hace(minutos: float) -> str:
     return f"hace {minutos / 1440:.1f} días"
 
 
+# Clase principal del agente persistente; app/main.py crea una sola instancia compartida para la web y MCP.
 class AgenteTutor:
+    # Inicializa memoria, cerebro y banco de DevCards, además de un candado (RLock) para evitar choques entre hilos.
     def __init__(self, config: Config, memoria: Optional[Memoria] = None, cerebro: Optional[Cerebro] = None,
                  banco: Optional[BancoDevCards] = None) -> None:
         self.config = config
@@ -51,6 +57,7 @@ class AgenteTutor:
         self._ciclos_sin_novedad = 0
 
     # ---- ciclo de vida --------------------------------------------------------
+    # Se llama dentro de iniciar() al arrancar el servidor; suma +1 a arranques y resume en bitácora lo que recuerda.
     def despertar(self) -> dict[str, Any]:
         """Se ejecuta al arrancar el proceso: registra el arranque y anota lo que recuerda."""
         with self._lock:
@@ -69,6 +76,7 @@ class AgenteTutor:
             self.memoria.anotar("sistema", texto)
             return lat
 
+    # Lo llama lifespan() en app/main.py al encender FastAPI: registra el arranque y lanza el hilo en segundo plano.
     def iniciar(self) -> None:
         if self._hilo and self._hilo.is_alive():
             return
@@ -77,15 +85,18 @@ class AgenteTutor:
         self._hilo = threading.Thread(target=self._bucle, name="agente-tutor", daemon=True)
         self._hilo.start()
 
+    # Lo llama lifespan() en app/main.py al apagar el servidor para detener el hilo ordenadamente.
     def detener(self) -> None:
         self._stop.set()
         if self._hilo:
             self._hilo.join(timeout=10)
 
+    # Responde True si el hilo autónomo está vivo; se reporta en /health y /api/estado.
     @property
     def vivo(self) -> bool:
         return bool(self._hilo and self._hilo.is_alive())
 
+    # Bucle infinito del hilo de fondo: ejecuta self.ciclo() cada TUTOR_INTERVALO_S segundos sin caerse ante errores.
     def _bucle(self) -> None:
         while not self._stop.is_set():
             try:
@@ -99,10 +110,12 @@ class AgenteTutor:
             self._stop.wait(self.config.intervalo_ciclo_s)
 
     # ---- ciclo autónomo: percibir → decidir → actuar ---------------------------
+    # Corazón del agente: lo llama _bucle cada TUTOR_INTERVALO_S segundos, POST /api/ciclo y MCP en stdio.
     def ciclo(self) -> dict[str, Any]:
         with self._lock:
             t = ahora()
             # PERCIBIR
+            # Mira cuántas preguntas esperan respuesta, qué temas ya vencieron y cuántos huecos libres hay.
             pendientes = self.memoria.pendientes()
             con_pendiente = {int(p["tema_id"]) for p in pendientes}
             temas = self.memoria.listar_temas()
@@ -111,10 +124,12 @@ class AgenteTutor:
             acciones: list[dict[str, Any]] = []
 
             # DECIDIR (1): repasos vencidos, primero los más atrasados y los más difíciles.
+            # Calcula una puntuación combinando días de atraso, facilidad baja y cantidad de fallos.
             def prioridad(x: dict[str, Any]) -> float:
                 dias_retraso = (t - x["proximo_repaso"]).total_seconds() / 60 / self.config.minutos_por_dia
                 return dias_retraso + 2 * (2.5 - float(x["facilidad"])) + 0.5 * int(x["fallos"])
 
+            # Genera preguntas para los temas vencidos más urgentes mientras haya cupo disponible.
             for tema in sorted(vencidos, key=prioridad, reverse=True)[:cupo]:
                 retraso = (t - tema["proximo_repaso"]).total_seconds() / 60
                 if tema["repeticiones"] == 0 and tema["aciertos"] + tema["fallos"] == 0:
@@ -165,11 +180,13 @@ class AgenteTutor:
                     self.memoria.anotar("ciclo", f"Sigo vivo: {len(pendientes)} preguntas esperando respuesta; {falta}.")
             return {"preguntas_creadas": acciones, "pendientes": len(pendientes) + len(acciones), "vencidos": len(vencidos)}
 
+    # Evita llenar la bitácora con el mismo aviso repetido cada 20 segundos cuando nada cambia.
     def _anotar_una_vez(self, tipo: str, detalle: str) -> None:
         ultimas = self.memoria.leer_bitacora(limite=1)
         if not ultimas or ultimas[0]["detalle"] != detalle:
             self.memoria.anotar(tipo, detalle)
 
+    # Anota el motivo en bitácora y guarda la pregunta pendiente usando DevCards o Cerebro (Gemini/local).
     def _preparar_pregunta(self, tema: dict[str, Any], motivo: str) -> dict[str, Any]:
         self.memoria.anotar("decision", motivo)
         tarjeta = self.banco.por_id.get(str(tema.get("ref_externa"))) if tema.get("origen") == "devcards" else None
@@ -191,6 +208,8 @@ class AgenteTutor:
         return p
 
     # ---- responder -------------------------------------------------------------
+    # La llaman POST /api/preguntas/{id}/responder (main.py) y responder_pregunta (mcp_tools.py).
+    # Corrige la respuesta, recalcula SM-2, programa el próximo repaso en Memoria y devuelve el resultado.
     def responder(self, pregunta_id: int, texto: str) -> dict[str, Any]:
         with self._lock:
             p = self.memoria.obtener_pregunta(pregunta_id)
@@ -238,6 +257,8 @@ class AgenteTutor:
                 "proximo_repaso": proximo,
             }
 
+    # La llaman POST /api/preguntas/{id}/leida y la herramienta MCP marcar_tarjeta_leida cuando pulsas "Ya la leí".
+    # Desbloquea la pregunta guardando la hora en leida_en y deja constancia en la bitácora.
     def marcar_leida(self, pregunta_id: int) -> dict[str, Any]:
         with self._lock:
             p = self.memoria.obtener_pregunta(pregunta_id)
@@ -249,6 +270,8 @@ class AgenteTutor:
                 )
             return {"pregunta_id": pregunta_id, "leida_en": leida_en}
 
+    # Usada por GET /api/preguntas/pendientes (main.py) y ver_preguntas_pendientes (mcp_tools.py)
+    # para entregar la ficha completa (definición, analogía, código, idea clave) mientras requiere_lectura es True.
     def lectura_de(self, p: dict[str, Any]) -> Optional[dict[str, str]]:
         """La tarjeta completa para leer, solo mientras la pregunta la exige."""
         if not p.get("requiere_lectura"):
@@ -263,6 +286,7 @@ class AgenteTutor:
             "idea_clave": str(t.get("key_takeaway", "")),
         }
 
+    # Corrige tarjetas de opción múltiple comparando letra ("A".."H"), número o texto completo; da nota 5 o 1.
     @staticmethod
     def _corregir_opcion_multiple(p: dict[str, Any], texto: str) -> tuple[int, str, str]:
         opciones: list[str] = p["opciones"]
@@ -282,12 +306,14 @@ class AgenteTutor:
         return 1, f"Incorrecto. La respuesta era {LETRAS[correcta]}) {opciones[correcta]}.{idea}", "devcards"
 
     # ---- consultas -------------------------------------------------------------
+    # Guarda un tema propio con tus notas (POST /api/temas o MCP agregar_tema) y deja aviso en la bitácora.
     def agregar_tema(self, nombre: str, notas: str) -> dict[str, Any]:
         with self._lock:
             tema = self.memoria.crear_tema(nombre.strip(), notas.strip())
             self.memoria.anotar("sistema", f"Aprendí un tema nuevo: «{tema['nombre']}». Lo preguntaré en mi próximo ciclo.")
             return tema
 
+    # Activa o pausa un mazo de DevCards (PUT /api/mazos/{categoria} o MCP activar_mazo) tras comprobar que existe.
     def activar_mazo(self, categoria: str, activo: bool) -> None:
         if not self.banco.existe_categoria(categoria):
             raise LookupError(f"No existe el mazo «{categoria}»")
@@ -295,6 +321,7 @@ class AgenteTutor:
             self.memoria.activar_mazo(categoria, activo)
             self.memoria.anotar("sistema", f"Mazo «{categoria}» {'activado' if activo else 'pausado'}.")
 
+    # Combina las 42 categorías del banco con cuáles están activas y cuántas ya introdujo el agente (GET /api/mazos).
     def mazos(self) -> list[dict[str, Any]]:
         activos = set(self.memoria.mazos_activos())
         introducidas = self.memoria.refs_introducidas()
@@ -306,6 +333,7 @@ class AgenteTutor:
         return [{**m, "activo": m["categoria"] in activos, "introducidas": vistas.get(m["categoria"], 0)}
                 for m in self.banco.categorias()]
 
+    # Calcula estadísticas globales de estudio (dominados = intervalo >= 6 días) para GET /api/progreso y MCP.
     def progreso(self) -> dict[str, Any]:
         temas = self.memoria.listar_temas()
         respondidas = sum(int(x["aciertos"]) + int(x["fallos"]) for x in temas)
@@ -323,6 +351,7 @@ class AgenteTutor:
             ],
         }
 
+    # Resume en un diccionario todo el estado vivo del agente (latido, cerebro, BD, config) para GET /api/estado.
     def estado(self) -> dict[str, Any]:
         lat = self.memoria.leer_latido()
         return {

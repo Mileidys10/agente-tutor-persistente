@@ -184,6 +184,7 @@ Para clientes locales como **Claude Desktop**, añade una entrada en `claude_des
 
 ## Contrato API y privacidad
 
+- Cómo funciona el programa por dentro (recorrido, conexiones y preguntas frecuentes): [`docs/COMO_FUNCIONA.md`](docs/COMO_FUNCIONA.md)
 - Especificación técnica de endpoints: [`docs/CONTRATO_API.md`](docs/CONTRATO_API.md)
 - Casos de uso y diagramas: [`docs/CASOS_DE_USO.md`](docs/CASOS_DE_USO.md)
 - Guion de exposición en clase: [`docs/GUION_EXPOSICION.md`](docs/GUION_EXPOSICION.md)

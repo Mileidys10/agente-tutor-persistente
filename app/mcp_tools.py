@@ -1,3 +1,5 @@
+# Archivo app/mcp_tools.py: expone 9 herramientas MCP para que Claude Desktop o Claude Code estudien contigo.
+# App/main.py lo monta en /mcp para acceso remoto y también puede ejecutarse directo por stdio en local.
 """Servidor MCP del tutor: cualquier cliente MCP (Claude Desktop, Claude Code, Gemini CLI...) puede
 estudiar con el agente. Las herramientas usan la misma memoria persistente que la web.
 
@@ -15,6 +17,7 @@ from mcp.server.mcpserver import MCPServer
 from app.agente import AgenteTutor
 
 
+# Quita "respuesta_esperada" y otros campos internos antes de mandar una pregunta al cliente MCP.
 def _limpiar(p: dict[str, Any]) -> dict[str, Any]:
     # Nunca se revela la respuesta esperada antes de que la persona conteste.
     return {
@@ -23,6 +26,8 @@ def _limpiar(p: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Registra el servidor MCP y conecta cada herramienta con los métodos de AgenteTutor (app/agente.py).
+# La llama app/main.py al arrancar la web o el bloque __main__ si se ejecuta por terminal (stdio).
 def crear_servidor_mcp(agente: AgenteTutor) -> MCPServer:
     mcp = MCPServer(
         name="agente-tutor-persistente",
@@ -33,46 +38,55 @@ def crear_servidor_mcp(agente: AgenteTutor) -> MCPServer:
         ),
     )
 
+    # Herramienta 1: guarda un tema propio del estudiante delegando en agente.agregar_tema().
     @mcp.tool(description="Agrega un tema propio con tus notas de estudio. El agente lo preguntará en su próximo ciclo.")
     def agregar_tema(nombre: str, notas: str) -> dict[str, Any]:
         tema = agente.agregar_tema(nombre[:200], notas[:8000])
         return {"tema_id": tema["id"], "nombre": tema["nombre"]}
 
+    # Herramienta 2: lista preguntas pendientes junto con su ficha de lectura si requiere_lectura es True.
     @mcp.tool(description="Preguntas que el agente preparó y esperan respuesta (sin revelar la respuesta).")
     def ver_preguntas_pendientes() -> list[dict[str, Any]]:
         if not agente.vivo:  # modo stdio sin hilo de fondo: se ejecuta un ciclo al consultar
             agente.ciclo()
         return [{**_limpiar(p), "lectura": agente.lectura_de(p)} for p in agente.memoria.pendientes()]
 
+    # Herramienta 3: equivale al botón "Ya la leí" de la web; desbloquea la pregunta en la base de datos.
     @mcp.tool(description="Marca como leída la DevCard de una pregunta (paso previo obligatorio si requiere_lectura es true).")
     def marcar_tarjeta_leida(pregunta_id: int) -> dict[str, Any]:
         r = agente.marcar_leida(pregunta_id)
         return {**r, "leida_en": r["leida_en"].isoformat()}
 
+    # Herramienta 4: evalúa la respuesta del estudiante y reprograma el tema con SM-2.
     @mcp.tool(description="Envía la respuesta de la persona a una pregunta pendiente. Para opción múltiple vale la letra (A, B, C...).")
     def responder_pregunta(pregunta_id: int, respuesta: str) -> dict[str, Any]:
         r = agente.responder(pregunta_id, respuesta[:2000])
         return {**r, "proximo_repaso": r["proximo_repaso"].isoformat()}
 
+    # Herramienta 5: muestra las 42 categorías DevCards y cuántas tarjetas has visto de cada una.
     @mcp.tool(description="Lista los mazos de DevCards con cuántas tarjetas tienen y si están activos.")
     def ver_mazos() -> list[dict[str, Any]]:
         return agente.mazos()
 
+    # Herramienta 6: activa o pausa una categoría DevCards igual que los interruptores de la página web.
     @mcp.tool(description="Activa o pausa un mazo de DevCards por su nombre exacto de categoría.")
     def activar_mazo(categoria: str, activo: bool = True) -> dict[str, Any]:
         agente.activar_mazo(categoria, activo)
         return {"categoria": categoria, "activo": activo}
 
+    # Herramienta 7: devuelve métricas de estudio (temas, dominados, aciertos y temas más difíciles).
     @mcp.tool(description="Progreso de estudio: temas, dominados, porcentaje de aciertos y temas más difíciles.")
     def ver_progreso() -> dict[str, Any]:
         return agente.progreso()
 
+    # Herramienta 8: resume estado vivo, latido (arranques y ciclos), cerebro y configuración actual.
     @mcp.tool(description="Estado del agente: si está vivo, ciclos, arranques y configuración.")
     def ver_estado() -> dict[str, Any]:
         e = agente.estado()
         lat = {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in (e.get("latido") or {}).items()}
         return {**e, "latido": lat}
 
+    # Herramienta 9: lee el historial reciente de decisiones guardadas en la tabla bitacora.
     @mcp.tool(description="Últimas decisiones y acciones que el agente anotó en su bitácora.")
     def ver_bitacora(limite: int = 15) -> list[dict[str, Any]]:
         return [
@@ -83,6 +97,7 @@ def crear_servidor_mcp(agente: AgenteTutor) -> MCPServer:
     return mcp
 
 
+# Punto de entrada directo si ejecutas "python -m app.mcp_tools" desde Claude Desktop por entrada/salida estándar (stdio).
 if __name__ == "__main__":  # modo local por stdio; el ciclo autónomo corre en el servidor web
     from app.config import Config
 

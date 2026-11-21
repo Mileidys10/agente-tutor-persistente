@@ -1,6 +1,9 @@
+// Archivo app/static/app.js: lógica del navegador que conecta index.html con la API de FastAPI (app/main.py).
+// Refresca los datos cada 5 segundos sin recargar la página y construye todo usando textContent para evitar XSS.
 "use strict";
 
 (() => {
+  // Constantes y estado temporal en memoria del navegador.
   const CLAVE_STORAGE = "agente_tutor_token";
   const LETRAS = "ABCDEFGH";
   const INTERVALO_REFRESCO_MS = 5000;
@@ -13,6 +16,7 @@
   let recargaEnCurso = false;
   const leidasLocalmente = new Set();
 
+  // Formateador de fechas y horas en español para mostrar cuándo ocurrió cada evento.
   const formatoFechaHora = new Intl.DateTimeFormat("es", {
     day: "2-digit",
     month: "2-digit",
@@ -21,10 +25,12 @@
     second: "2-digit",
   });
 
+  // Atajo para buscar un elemento del HTML por su atributo id.
   function el(id) {
     return document.getElementById(id);
   }
 
+  // Crea un nodo HTML limpio y coloca su texto con textContent (nunca innerHTML) para mayor seguridad.
   function crear(etiqueta, clase, texto) {
     const nodo = document.createElement(etiqueta);
     if (clase) nodo.className = clase;
@@ -32,12 +38,14 @@
     return nodo;
   }
 
+  // Comprueba si el usuario tiene el cursor o foco del teclado dentro de un bloque para no interrumpirlo al refrescar.
   function contieneFoco(contenedor) {
     const activo = document.activeElement;
     return Boolean(activo && contenedor && contenedor.contains(activo));
   }
 
   // ---- Token y almacenamiento seguro ----------------------------------------
+  // Lee la clave de acceso (TUTOR_TOKEN) desde memoria o localStorage para enviarla en la cabecera X-Tutor-Token.
   function obtenerToken() {
     if (tokenEnMemoria) return tokenEnMemoria;
     try {
@@ -48,6 +56,7 @@
     return tokenEnMemoria;
   }
 
+  // Guarda o borra la clave de acceso en localStorage (si el navegador lo bloquea, queda solo en memoria).
   function guardarToken(valor) {
     tokenEnMemoria = valor || "";
     try {
@@ -62,17 +71,20 @@
   }
 
   // ---- Formato de fechas y etiquetas ----------------------------------------
+  // Convierte una cadena ISO en UTC enviada por FastAPI a un objeto Date válido.
   function parsearFecha(iso) {
     if (!iso) return null;
     const d = new Date(iso);
     return Number.isNaN(d.getTime()) ? null : d;
   }
 
+  // Convierte una fecha ISO en reloj local legible ("20/11, 21:45:10").
   function formatearFecha(iso) {
     const d = parsearFecha(iso);
     return d ? formatoFechaHora.format(d) : "—";
   }
 
+  // Muestra cuánto falta o cuánto pasó desde una fecha ("en 45 s", "hace 2 min") para demostrar SM-2 en vivo.
   function formatearRelativo(iso) {
     const d = parsearFecha(iso);
     if (!d) return "—";
@@ -89,12 +101,14 @@
     return `en ${(diffS / 86400).toFixed(1)} días`;
   }
 
+  // Elige el texto y color de la píldora según quién creó la pregunta (Gemini, DevCards o Motor local).
   function formatearFuente(fuente) {
     if (fuente === "gemini") return { texto: "Gemini", clase: "pildora pildora-azul" };
     if (fuente === "devcards") return { texto: "DevCards", clase: "pildora pildora-ok" };
     return { texto: "Motor local", clase: "pildora pildora-neutra" };
   }
 
+  // Asigna color visual a cada tipo de evento de la bitácora del agente.
   function claseTipoBitacora(tipo) {
     switch (tipo) {
       case "evaluacion":
@@ -113,6 +127,7 @@
   }
 
   // ---- Avisos en pantalla ---------------------------------------------------
+  // Muestra un banner temporal arriba indicando si una operación salió bien o dio error.
   function mostrarAvisoGlobal(texto, esError = false) {
     const aviso = el("aviso-global");
     aviso.textContent = texto;
@@ -127,6 +142,7 @@
   }
 
   // ---- Cliente HTTP ---------------------------------------------------------
+  // Envía todas las peticiones fetch al backend añadiendo X-Tutor-Token; si recibe 401 pide la clave y reintenta.
   async function peticion(ruta, opciones = {}, reintento = null) {
     const headers = new Headers(opciones.headers || {});
     const token = obtenerToken();
@@ -166,6 +182,7 @@
   }
 
   // ---- Diálogo de clave de acceso -------------------------------------------
+  // Abre la ventana modal para escribir TUTOR_TOKEN y guarda la acción que se reintentará al validar.
   function abrirDialogoToken(mensaje, reintento = null) {
     accionPendiente = typeof reintento === "function" ? reintento : null;
     const dlg = el("dialogo-token");
@@ -185,6 +202,7 @@
     el("input-token").focus();
   }
 
+  // Cierra el diálogo modal de clave de acceso y limpia cualquier acción pendiente.
   function cerrarDialogoToken() {
     const dlg = el("dialogo-token");
     accionPendiente = null;
@@ -195,6 +213,7 @@
     }
   }
 
+  // Valida la clave escrita llamando a GET /api/acceso; si es correcta la guarda y ejecuta el reintento pendiente.
   async function manejarEnvioToken(evento) {
     evento.preventDefault();
     const input = el("input-token");
@@ -241,6 +260,7 @@
   }
 
   // ---- Renderizado: Cabecera y Estado ---------------------------------------
+  // Actualiza la cabecera con los datos de GET /api/estado ("Desperté N veces...", ciclos, cerebro y BD).
   function renderizarEstado(estado) {
     const vivo = Boolean(estado.vivo);
     const pildoraVida = el("estado-vida");
@@ -274,6 +294,7 @@
   }
 
   // ---- Renderizado: Preguntas pendientes (preservando foco y texto) ----------
+  // Mensaje guía cuando no hay ninguna pregunta esperando en el panel "Estudiar".
   function crearVacioPreguntas() {
     return crear(
       "p",
@@ -282,6 +303,7 @@
     );
   }
 
+  // Dibuja la tarjeta verde o ámbar con tu calificación (0-5), respuesta esperada y nueva fecha SM-2.
   function mostrarResultadoRespuesta(res) {
     const caja = el("resultado-respuesta");
     const esCorrecta = Boolean(res.correcta);
@@ -330,6 +352,7 @@
     enfocar(caja);
   }
 
+  // Coloca el foco del teclado en un elemento accesible (necesario cuando cambia la tarjeta sin recargar).
   function enfocar(nodo) {
     if (!nodo) {
       return;
@@ -340,6 +363,7 @@
     nodo.focus({ preventScroll: false });
   }
 
+  // Envía la letra elegida o el texto escrito a POST /api/preguntas/{id}/responder y muestra el resultado SM-2.
   async function enviarRespuesta(preguntaId, textoRespuesta, tarjetaNodo) {
     if (tarjetaNodo) {
       tarjetaNodo.dataset.enviando = "1";
@@ -376,10 +400,12 @@
     }
   }
 
+  // Decide si una tarjeta pendiente debe mostrar primero la ficha de lectura antes de la pregunta.
   function esModoLectura(p) {
     return Boolean(p && p.requiere_lectura && p.lectura && !leidasLocalmente.has(String(p.id)));
   }
 
+  // Llama a POST /api/preguntas/{id}/leida al pulsar "Ya la leí, hazme la pregunta" y transforma la tarjeta al instante.
   async function marcarTarjetaLeida(p, art, btn) {
     if (btn) btn.disabled = true;
     if (art) art.dataset.enviando = "1";
@@ -405,6 +431,7 @@
     }
   }
 
+  // Rellena la tarjeta con SOLO la ficha de estudio (título, definición, analogía, código en <pre><code> e idea clave).
   function rellenarTarjetaLectura(art, p) {
     const lec = p.lectura || {};
     art.dataset.modo = "lectura";
@@ -463,6 +490,7 @@
     art.replaceChildren(...hijos);
   }
 
+  // Rellena la tarjeta con la pregunta y sus opciones (A/B/C/D) o cuadro de texto; mueve foco si recién pasó de lectura.
   function rellenarTarjetaPregunta(art, p, enfocarPregunta = false) {
     art.dataset.modo = "pregunta";
     art.className = "tarjeta-pregunta";
@@ -537,6 +565,7 @@
     }
   }
 
+  // Crea el contenedor <article> de una pregunta nueva eligiendo vista de lectura o pregunta directa.
   function crearTarjetaPregunta(p) {
     const art = crear("article", "tarjeta-pregunta");
     art.dataset.preguntaId = String(p.id);
@@ -548,6 +577,7 @@
     return art;
   }
 
+  // Sincroniza #lista-preguntas con el servidor sin borrar tarjetas ya abiertas ni quitar el foco al escribir.
   function renderizarPreguntas(pendientes) {
     const cont = el("lista-preguntas");
     el("badge-pendientes").textContent = `${pendientes.length} ${pendientes.length === 1 ? "pendiente" : "pendientes"}`;
@@ -583,6 +613,7 @@
   }
 
   // ---- Renderizado: Progreso e historial ------------------------------------
+  // Actualiza los contadores de avance, la lista de temas con más fallos y las últimas evaluaciones.
   function renderizarProgreso(prog, historial) {
     el("prog-temas").textContent = String(prog.temas ?? 0);
     el("prog-dominados").textContent = String(prog.dominados ?? 0);
@@ -628,6 +659,7 @@
   }
 
   // ---- Renderizado: Mis temas -----------------------------------------------
+  // Envía DELETE /api/temas/{id} una vez confirmada la eliminación para borrar el tema y su historial.
   async function borrarTemaConfirmado(temaId) {
     try {
       await peticion(
@@ -645,6 +677,7 @@
     }
   }
 
+  // Muestra cada tema guardado con su próxima fecha SM-2 y confirmación en dos pasos para evitar borrados por error.
   function renderizarTemas(temas, forzar = false) {
     el("badge-temas").textContent = `${temas.length} ${temas.length === 1 ? "tema" : "temas"}`;
     const cont = el("lista-temas");
@@ -726,6 +759,7 @@
   }
 
   // ---- Renderizado: Mazos DevCards ------------------------------------------
+  // Envía PUT /api/mazos/{categoria} al pulsar el interruptor Activo/Pausado de una categoría DevCards.
   async function alternarMazo(mazo, btn) {
     const nuevoEstado = !mazo.activo;
     btn.disabled = true;
@@ -749,6 +783,7 @@
     }
   }
 
+  // Dibuja la lista de las 42 categorías DevCards aplicando el filtro escrito por el usuario en el buscador.
   function renderizarMazos(mazos, forzar = false) {
     mazosCache = mazos;
     const totalTarjetas = mazos.reduce((acc, m) => acc + Number(m.tarjetas || 0), 0);
@@ -795,6 +830,7 @@
   }
 
   // ---- Renderizado: Bitácora ------------------------------------------------
+  // Pinta las últimas anotaciones del diario interno del agente (de más nueva a más antigua).
   function renderizarBitacora(entradas) {
     const lista = el("lista-bitacora");
     if (!Array.isArray(entradas) || entradas.length === 0) {
@@ -813,6 +849,7 @@
   }
 
   // ---- Acciones principales -------------------------------------------------
+  // Fuerza una ronda inmediata del agente (POST /api/ciclo) para la demostración en vivo sin esperar al reloj.
   async function ejecutarCicloAhora() {
     const btn = el("btn-ciclo");
     btn.disabled = true;
@@ -836,6 +873,7 @@
     }
   }
 
+  // Procesa el formulario de "Mis temas" validando nombre >= 2 letras y enviando POST /api/temas.
   async function manejarAgregarTema(evento) {
     evento.preventDefault();
     const inputNombre = el("tema-nombre");
@@ -886,6 +924,7 @@
     await enviar();
   }
 
+  // Consulta en paralelo los 7 endpoints de lectura para mantener sincronizada toda la página cada 5 segundos.
   async function cargarTodo(forzar = false) {
     if (recargaEnCurso && !forzar) return;
     recargaEnCurso = true;
@@ -913,6 +952,7 @@
     }
   }
 
+  // Conecta todos los eventos de botones y formularios al cargar la página y arranca el refresco de 5 segundos.
   function iniciar() {
     el("btn-ciclo").addEventListener("click", ejecutarCicloAhora);
     el("btn-token").addEventListener("click", () => abrirDialogoToken(""));

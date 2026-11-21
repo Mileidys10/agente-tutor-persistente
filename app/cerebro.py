@@ -1,3 +1,5 @@
+# Archivo app/cerebro.py: redacta preguntas abiertas a partir de tus apuntes y califica respuestas (0 a 5).
+# AgenteTutor (app/agente.py) lo llama al preparar temas propios y al corregir respuestas abiertas.
 """Cerebro del tutor: genera preguntas y corrige respuestas.
 
 Con GEMINI_API_KEY usa Gemini (API REST de Google AI Studio). Sin clave, o si Gemini falla, usa un
@@ -16,6 +18,7 @@ from typing import Optional
 
 import httpx
 
+# Logger para avisar si Gemini falló y el motor pasó a modo local; URL de la API REST y palabras vacías ignoradas.
 log = logging.getLogger("tutor.cerebro")
 
 URL_GEMINI = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
@@ -26,6 +29,7 @@ _VACIAS = {
 }
 
 
+# Resultado de pedirle al cerebro una pregunta: el enunciado, la respuesta esperada y quién la creó ("gemini" o "local").
 @dataclass(frozen=True)
 class Pregunta:
     texto: str
@@ -33,6 +37,7 @@ class Pregunta:
     fuente: str  # gemini | local
 
 
+# Resultado de corregir una respuesta abierta: nota SM-2 (0 a 5), comentario breve y evaluador.
 @dataclass(frozen=True)
 class Evaluacion:
     nota: int  # 0-5, la "calidad" de SM-2
@@ -40,16 +45,21 @@ class Evaluacion:
     fuente: str
 
 
+# Convierte un texto a minúsculas sin tildes para comparar respuestas sin fallar por acentos o mayúsculas.
+# También la importa AgenteTutor (app/agente.py) para comparar respuestas de opción múltiple.
 def _normalizar(texto: str) -> str:
     sin_tildes = unicodedata.normalize("NFKD", texto.lower())
     return "".join(c for c in sin_tildes if not unicodedata.combining(c))
 
 
+# Extrae palabras clave de más de 3 letras quitando palabras vacías; sirve para el motor local sin Gemini.
 def _palabras(texto: str) -> list[str]:
     return [p for p in re.findall(r"[a-z0-9]+", _normalizar(texto)) if len(p) > 3 and p not in _VACIAS]
 
 
+# Encapsula la decisión entre llamar a Gemini por HTTP o usar reglas locales deterministas.
 class Cerebro:
+    # Recibe la API key (puede estar vacía), el nombre del modelo y un cliente HTTP reutilizable.
     def __init__(self, api_key: str = "", modelo: str = "gemini-2.5-flash", rng: Optional[random.Random] = None,
                  cliente: Optional[httpx.Client] = None) -> None:
         self.api_key = api_key
@@ -57,11 +67,13 @@ class Cerebro:
         self.rng = rng or random.Random()
         self.cliente = cliente or httpx.Client(timeout=20.0)
 
+    # Indica si el tutor tiene una clave configurada; lo consulta AgenteTutor.estado() para mostrarlo en la cabecera web.
     @property
     def usa_gemini(self) -> bool:
         return bool(self.api_key)
 
     # ---- Gemini ---------------------------------------------------------------
+    # Envía un prompt a Google Gemini pidiendo respuesta JSON; devuelve None si no hay clave o si falla la red.
     def _gemini_json(self, prompt: str) -> Optional[dict]:
         if not self.api_key:
             return None
@@ -83,6 +95,8 @@ class Cerebro:
             return None
 
     # ---- generar pregunta -----------------------------------------------------
+    # La llama AgenteTutor._preparar_pregunta() en app/agente.py para temas propios del estudiante.
+    # Intenta generar la pregunta con Gemini y, si no está disponible, cae al motor local.
     def generar_pregunta(self, tema: str, notas: str, fallos_previos: list[str]) -> Pregunta:
         prompt = (
             "Eres un tutor universitario. Escribe UNA pregunta corta en español para repasar el tema, "
@@ -98,6 +112,7 @@ class Cerebro:
             return Pregunta(str(datos["pregunta"]).strip()[:500], str(datos["respuesta_esperada"]).strip()[:1000], "gemini")
         return self._pregunta_local(tema, notas)
 
+    # Plan B sin internet ni API key: elige una frase de tus notas y oculta una palabra importante con "_____".
     def _pregunta_local(self, tema: str, notas: str) -> Pregunta:
         frases = [f.strip() for f in re.split(r"(?<=[.!?])\s+|\n+", notas) if len(_palabras(f)) >= 3]
         if not frases:
@@ -112,6 +127,8 @@ class Cerebro:
         return Pregunta(f"Completa la idea sobre «{tema}»: {hueco}", clave, "local")
 
     # ---- evaluar respuesta ----------------------------------------------------
+    # La llama AgenteTutor.responder() cuando la pregunta es abierta (sin opciones A/B/C/D).
+    # Evalúa del 0 al 5 con Gemini si hay clave; si falla o no hay clave, compara conceptos en local.
     def evaluar(self, pregunta: str, esperada: str, respuesta: str) -> Evaluacion:
         if not respuesta.strip():
             return Evaluacion(0, f"No respondiste. La respuesta era: {esperada}", "local")
@@ -133,6 +150,7 @@ class Cerebro:
                 pass
         return self._evaluar_local(esperada, respuesta)
 
+    # Calificación local sin IA externa: mide qué porcentaje de palabras clave esperadas aparecen en tu respuesta.
     @staticmethod
     def _evaluar_local(esperada: str, respuesta: str) -> Evaluacion:
         esp, resp = _palabras(esperada), set(_palabras(respuesta))

@@ -1,3 +1,5 @@
+# Archivo app/memoria.py: capa de base de datos con SQLAlchemy Core (PostgreSQL en Render o SQLite en local).
+# Define las 6 tablas permanentes del agente y todas las operaciones de lectura y escritura.
 """Memoria persistente del agente (SQLAlchemy Core): PostgreSQL en Render, SQLite en local y en pruebas.
 
 Todo lo que el agente sabe vive aquí, no en variables de Python: si el proceso se reinicia
@@ -29,8 +31,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
+# Catálogo de esquemas (MetaData) con las 6 tablas que SQLAlchemy crea automáticamente al arrancar.
 metadata = MetaData()
 
+# Tabla 1: guarda tanto tus temas propios como las DevCards presentadas, junto con su estado SM-2.
 temas = Table(
     "temas",
     metadata,
@@ -49,6 +53,7 @@ temas = Table(
     Column("creado", DateTime(timezone=True), nullable=False),
 )
 
+# Tabla 2: cola de preguntas creadas por el agente; quedan en "pendiente" hasta que las respondes.
 preguntas = Table(
     "preguntas",
     metadata,
@@ -67,6 +72,7 @@ preguntas = Table(
     Column("respondida_en", DateTime(timezone=True)),
 )
 
+# Tabla 3: historial permanente de respuestas enviadas, nota obtenida (0-5) y retroalimentación.
 respuestas = Table(
     "respuestas",
     metadata,
@@ -78,6 +84,7 @@ respuestas = Table(
     Column("fecha", DateTime(timezone=True), nullable=False),
 )
 
+# Tabla 4: recuerda qué categorías del banco DevCards dejaste activas (1) o pausadas (0).
 mazos = Table(  # categorías de DevCards que la persona eligió estudiar
     "mazos",
     metadata,
@@ -86,6 +93,7 @@ mazos = Table(  # categorías de DevCards que la persona eligió estudiar
     Column("activado_en", DateTime(timezone=True), nullable=False),
 )
 
+# Tabla 5: diario cronológico de decisiones y eventos del agente; se ve en la sección "Bitácora" de la web.
 bitacora = Table(
     "bitacora",
     metadata,
@@ -95,6 +103,7 @@ bitacora = Table(
     Column("detalle", Text, nullable=False),
 )
 
+# Tabla 6: fila única (id=1) que cuenta cuántas veces despertó el servidor y cuántos ciclos ejecutó.
 latido = Table(
     "latido",
     metadata,
@@ -107,10 +116,12 @@ latido = Table(
 )
 
 
+# Devuelve la hora actual siempre en UTC para evitar desfases entre el servidor de Render y el navegador.
 def ahora() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# Asegura que toda fecha leída de base de datos tenga zona horaria UTC antes de restarla con ahora().
 def _utc(valor: Optional[datetime]) -> Optional[datetime]:
     # SQLite devuelve fechas sin zona horaria: se normalizan a UTC.
     if valor is None:
@@ -118,6 +129,8 @@ def _utc(valor: Optional[datetime]) -> Optional[datetime]:
     return valor if valor.tzinfo else valor.replace(tzinfo=timezone.utc)
 
 
+# Convierte una fila SQL en diccionario Python limpio: normaliza fechas, decodifica opciones JSON
+# y calcula si la pregunta todavía exige lectura previa.
 def _fila(row: Any) -> dict[str, Any]:
     datos = dict(row._mapping)
     for k, v in datos.items():
@@ -130,7 +143,9 @@ def _fila(row: Any) -> dict[str, Any]:
     return datos
 
 
+# Objeto central de persistencia; AgenteTutor (app/agente.py) guarda y lee aquí todo su estado.
 class Memoria:
+    # Conecta el motor SQLAlchemy, crea las tablas si la base es nueva y aplica migraciones pendientes.
     def __init__(self, url: str) -> None:
         kwargs: dict[str, Any] = {"future": True, "pool_pre_ping": True}
         if url.startswith("sqlite"):
@@ -148,6 +163,7 @@ class Memoria:
         },
     }
 
+    # Inspecciona las tablas existentes y añade solo las columnas nuevas que falten (ALTER TABLE seguro).
     def _migrar(self) -> None:
         dialecto = self.engine.dialect.name
         existentes = {t: {c["name"] for c in inspect(self.engine).get_columns(t)} for t in self._COLUMNAS_NUEVAS}
@@ -160,6 +176,7 @@ class Memoria:
                     c.execute(text(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {ddl}"))
 
     # ---- latido: demuestra la persistencia entre reinicios -------------------
+    # Lo llama AgenteTutor.despertar() al iniciar FastAPI; crea la fila id=1 o suma +1 al contador de arranques.
     def registrar_arranque(self) -> dict[str, Any]:
         t = ahora()
         with self.engine.begin() as c:
@@ -170,16 +187,20 @@ class Memoria:
                 c.execute(update(latido).where(latido.c.id == 1).values(ultimo_arranque=t, arranques=latido.c.arranques + 1))
         return self.leer_latido()
 
+    # Lo llama AgenteTutor.ciclo() al final de cada ronda autónoma para guardar último ciclo y total acumulado.
     def registrar_ciclo(self) -> None:
         with self.engine.begin() as c:
             c.execute(update(latido).where(latido.c.id == 1).values(ultimo_ciclo=ahora(), ciclos=latido.c.ciclos + 1))
 
+    # Lee el estado del latido para GET /health (main.py) y GET /api/estado (agente.estado).
     def leer_latido(self) -> dict[str, Any]:
         with self.engine.connect() as c:
             fila = c.execute(select(latido).where(latido.c.id == 1)).first()
         return _fila(fila) if fila else {}
 
     # ---- temas --------------------------------------------------------------
+    # Inserta un tema propio (origen="usuario", rechazando duplicados) o una DevCard nueva (origen="devcards").
+    # Lo llaman AgenteTutor.agregar_tema() y el paso DECIDIR (2) de AgenteTutor.ciclo().
     def crear_tema(
         self, nombre: str, notas: str, origen: str = "usuario", categoria: str = "", ref_externa: Optional[str] = None,
     ) -> dict[str, Any]:
@@ -200,15 +221,18 @@ class Memoria:
             ).inserted_primary_key[0]
         return self.obtener_tema(int(tid))  # type: ignore[return-value]
 
+    # Busca un tema por su ID; lo usa AgenteTutor.responder() antes de recalcular SM-2.
     def obtener_tema(self, tema_id: int) -> Optional[dict[str, Any]]:
         with self.engine.connect() as c:
             fila = c.execute(select(temas).where(temas.c.id == tema_id)).first()
         return _fila(fila) if fila else None
 
+    # Devuelve todos los temas ordenados por próximo repaso; sirve para GET /api/temas, ciclo() y progreso().
     def listar_temas(self) -> list[dict[str, Any]]:
         with self.engine.connect() as c:
             return [_fila(f) for f in c.execute(select(temas).order_by(temas.c.proximo_repaso))]
 
+    # Elimina un tema junto con sus preguntas y respuestas (DELETE /api/temas/{id} en app/main.py).
     def borrar_tema(self, tema_id: int) -> bool:
         with self.engine.begin() as c:  # borrado explícito en cascada (SQLite no aplica ON DELETE por defecto)
             ids = select(preguntas.c.id).where(preguntas.c.tema_id == tema_id)
@@ -216,6 +240,7 @@ class Memoria:
             c.execute(preguntas.delete().where(preguntas.c.tema_id == tema_id))
             return c.execute(temas.delete().where(temas.c.id == tema_id)).rowcount > 0
 
+    # Guarda los nuevos valores SM-2 y suma +1 en aciertos o fallos; lo llama AgenteTutor.responder().
     def actualizar_repaso(
         self, tema_id: int, repeticiones: int, intervalo_dias: float, facilidad: float,
         proximo_repaso: datetime, acierto: bool,
@@ -231,6 +256,7 @@ class Memoria:
             )
 
     # ---- preguntas y respuestas ---------------------------------------------
+    # Guarda en la tabla preguntas una nueva pregunta pendiente creada por AgenteTutor._preparar_pregunta().
     def crear_pregunta(
         self, tema_id: int, texto: str, esperada: str, motivo: str, fuente: str,
         opciones: Optional[list[str]] = None, explicacion: str = "", requiere_lectura: bool = False,
@@ -246,6 +272,7 @@ class Memoria:
             ).inserted_primary_key[0]
         return self.obtener_pregunta(int(pid))  # type: ignore[return-value]
 
+    # Consulta una pregunta unida con el nombre y ref_externa de su tema (usada en responder y marcar_leida).
     def obtener_pregunta(self, pregunta_id: int) -> Optional[dict[str, Any]]:
         with self.engine.connect() as c:
             fila = c.execute(
@@ -255,6 +282,7 @@ class Memoria:
             ).first()
         return _fila(fila) if fila else None
 
+    # Lista todas las preguntas sin responder en orden de creación; alimenta /api/preguntas/pendientes, MCP y ciclo().
     def pendientes(self) -> list[dict[str, Any]]:
         with self.engine.connect() as c:
             filas = c.execute(
@@ -265,6 +293,7 @@ class Memoria:
             )
             return [_fila(f) for f in filas]
 
+    # Registra cuándo se pulsó "Ya la leí" en la columna leida_en; lo llama AgenteTutor.marcar_leida().
     def marcar_leida(self, pregunta_id: int) -> datetime:
         """Idempotente: si ya estaba leída, devuelve la fecha original."""
         with self.engine.begin() as c:
@@ -279,6 +308,7 @@ class Memoria:
             c.execute(update(preguntas).where(preguntas.c.id == pregunta_id).values(leida_en=t))
             return t
 
+    # Marca la pregunta como "respondida" de forma atómica (evita doble respuesta) e inserta el registro en respuestas.
     def registrar_respuesta(self, pregunta_id: int, texto: str, nota: int, retro: str) -> dict[str, Any]:
         t = ahora()
         with self.engine.begin() as c:
@@ -294,6 +324,7 @@ class Memoria:
             ).inserted_primary_key[0]
         return {"id": int(rid), "pregunta_id": pregunta_id, "nota": nota, "retroalimentacion": retro, "fecha": t}
 
+    # Lee las últimas respuestas evaluadas con su pregunta y tema para GET /api/historial (web).
     def historial(self, limite: int = 20) -> list[dict[str, Any]]:
         with self.engine.connect() as c:
             filas = c.execute(
@@ -308,6 +339,7 @@ class Memoria:
             )
             return [_fila(f) for f in filas]
 
+    # Busca las últimas preguntas donde obtuviste nota < 3 en un tema para que Gemini pregunte desde otro ángulo.
     def fallos_recientes(self, tema_id: int, limite: int = 3) -> list[str]:
         with self.engine.connect() as c:
             filas = c.execute(
@@ -320,6 +352,7 @@ class Memoria:
             return [str(f[0]) for f in filas]
 
     # ---- banco DevCards: mazos activos y tarjetas ya introducidas ---------------
+    # Activa o pausa una categoría de DevCards en la tabla mazos (PUT /api/mazos/{categoria} y MCP activar_mazo).
     def activar_mazo(self, categoria: str, activo: bool) -> None:
         with self.engine.begin() as c:
             if c.execute(select(mazos.c.categoria).where(mazos.c.categoria == categoria)).first():
@@ -327,14 +360,17 @@ class Memoria:
             else:
                 c.execute(mazos.insert().values(categoria=categoria, activo=1 if activo else 0, activado_en=ahora()))
 
+    # Devuelve la lista de nombres de categorías actualmente activas para que agente.ciclo() tome tarjetas nuevas.
     def mazos_activos(self) -> list[str]:
         with self.engine.connect() as c:
             return [str(f[0]) for f in c.execute(select(mazos.c.categoria).where(mazos.c.activo == 1).order_by(mazos.c.activado_en))]
 
+    # Devuelve el conjunto de IDs de DevCards que ya pasaron a temas (para no repetir tarjetas nuevas).
     def refs_introducidas(self) -> set[str]:
         with self.engine.connect() as c:
             return {str(f[0]) for f in c.execute(select(temas.c.ref_externa).where(temas.c.ref_externa.is_not(None)))}
 
+    # Cuenta cuántas DevCards nuevas se presentaron en el "día" actual (ventana de minutos_por_dia minutos).
     def introducidas_desde(self, minutos: float) -> int:
         desde = ahora() - timedelta(minutes=minutos)
         with self.engine.connect() as c:
@@ -343,10 +379,12 @@ class Memoria:
             ).scalar_one())
 
     # ---- bitácora: cada decisión del agente queda registrada ----------------
+    # Escribe una línea en el diario de decisiones del agente; la web y MCP la muestran después.
     def anotar(self, tipo: str, detalle: str) -> None:
         with self.engine.begin() as c:
             c.execute(bitacora.insert().values(fecha=ahora(), tipo=tipo, detalle=detalle[:2000]))
 
+    # Lee las últimas entradas de bitacora empezando por la más reciente (GET /api/bitacora y MCP ver_bitacora).
     def leer_bitacora(self, limite: int = 50) -> list[dict[str, Any]]:
         with self.engine.connect() as c:
             return [_fila(f) for f in c.execute(select(bitacora).order_by(bitacora.c.id.desc()).limit(limite))]
