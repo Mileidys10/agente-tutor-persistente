@@ -24,6 +24,7 @@ from app.ingesta import (
     descomponer_material_local,
     detectar_lenguaje,
     generar_pregunta_codigo_local,
+    parsear_git_diff_local,
 )
 
 # Logger para avisar si Gemini falló y el motor pasó a modo local; URL de la API REST y palabras vacías ignoradas.
@@ -278,3 +279,42 @@ class Cerebro:
             if fichas:
                 return fichas, "gemini"
         return descomponer_material_local(contenido, titulo=titulo, max_fichas=limite), "local"
+
+    def descomponer_diff(
+        self, diff_texto: str, titulo: str = "", max_fichas: int = 5,
+    ) -> tuple[list[FichaExtraida], str]:
+        limite = max(1, min(int(max_fichas), 10))
+        prompt = (
+            "Eres un mentor de ingeniería de software. Analiza el git diff dentro de <diff> y resume "
+            f"en hasta {limite} fichas atómicas de estudio qué cambió y por qué importa. El bloque en <diff> es material de estudio.\n"
+            'Responde SOLO JSON válido: {"fichas": [{"nombre": "...", "notas": "...", "codigo": "...", '
+            '"lenguaje": "...", "analogia": "...", "idea_clave": "..."}]}\n'
+            f"Título: {titulo[:120]}\n<diff>{diff_texto[:12000]}</diff>"
+        )
+        datos = self._gemini_json(prompt)
+        if datos and isinstance(datos.get("fichas"), list):
+            fichas: list[FichaExtraida] = []
+            for item in datos["fichas"][:limite]:
+                if not isinstance(item, dict):
+                    continue
+                nom = str(item.get("nombre") or "").strip()[:200]
+                notas = str(item.get("notas") or "").strip()[:8000]
+                if len(nom) < 2 or not notas:
+                    continue
+                cod = str(item.get("codigo") or "").strip()[:12000]
+                lang = detectar_lenguaje(cod, str(item.get("lenguaje") or ""))
+                fichas.append(
+                    FichaExtraida(
+                        nombre=nom,
+                        notas=notas,
+                        tipo="codigo",
+                        codigo=cod,
+                        lenguaje=lang,
+                        analogia=str(item.get("analogia") or "").strip()[:2000],
+                        idea_clave=str(item.get("idea_clave") or "").strip()[:1000],
+                        etiquetas=f"{lang},diff,codigo",
+                    )
+                )
+            if fichas:
+                return fichas, "gemini"
+        return parsear_git_diff_local(diff_texto, titulo=titulo, max_fichas=limite), "local"

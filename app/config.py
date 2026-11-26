@@ -33,6 +33,8 @@ class Config:
     token: str
     autonomo: bool
     leer_antes: bool = True
+    meta_diaria: int = 10
+    webhook_url: str = ""
 
     # Construye una instancia de Config leyendo os.environ; si falta una variable usa un valor seguro por defecto.
     @staticmethod
@@ -58,4 +60,6 @@ class Config:
             autonomo=os.environ.get("TUTOR_AUTONOMO", "1") != "0",
             # Modo "leer antes de responder": una DevCard nueva se muestra completa antes de su quiz.
             leer_antes=os.environ.get("TUTOR_LEER_ANTES", "1") != "0",
+            meta_diaria=max(1, int(os.environ.get("TUTOR_META_DIARIA", "10"))),
+            webhook_url=os.environ.get("TUTOR_WEBHOOK_URL", "").strip(),
         )

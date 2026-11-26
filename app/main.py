@@ -81,7 +81,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 # Instancia principal de FastAPI (expone automáticamente Swagger UI en /docs).
-app = FastAPI(title="Agente Tutor Persistente", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Agente Tutor Persistente", version="3.0.0", lifespan=lifespan)
 
 
 # Middleware HTTP que intercepta cualquier llamada hacia /mcp para exigir la misma clave TUTOR_TOKEN.
@@ -156,6 +156,27 @@ class MaterialEstudio(BaseModel):
     max_fichas: int = Field(5, ge=1, le=15)
 
 
+class DiffEstudio(BaseModel):
+    diff_texto: str = Field(..., min_length=15, max_length=30000)
+    titulo: str = Field("", max_length=200)
+    coleccion: str = Field("Cambios Git (Diff)", max_length=120)
+    max_fichas: int = Field(5, ge=1, le=10)
+
+
+class SimulacroBody(BaseModel):
+    titulo: str = Field("Simulacro de estudio", max_length=160)
+    cantidad: int = Field(5, ge=1, le=20)
+    coleccion_id: Optional[int] = None
+    categoria_devcards: str = Field("", max_length=120)
+    solo_brechas: bool = False
+
+
+class RelacionBody(BaseModel):
+    origen_id: int
+    destino_id: int
+    tipo: str = Field("prerrequisito", max_length=20)
+
+
 # Valida la respuesta enviada por el estudiante en POST /api/preguntas/{id}/responder.
 class Respuesta(BaseModel):
     respuesta: str = Field(..., max_length=2000)
@@ -204,7 +225,9 @@ def exportar_coleccion(coleccion_id: int, formato: str = "json") -> Any:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if isinstance(resultado, str):
-        return PlainTextResponse(resultado, media_type="text/markdown; charset=utf-8")
+        fmt = formato.strip().lower()
+        media = "text/tab-separated-values; charset=utf-8" if fmt == "anki" else "text/markdown; charset=utf-8"
+        return PlainTextResponse(resultado, media_type=media)
     return resultado
 
 
@@ -248,6 +271,29 @@ def progreso() -> dict[str, Any]:
 @app.get("/api/brechas")
 def brechas(limite: int = 10) -> dict[str, Any]:
     return agente.diagnosticar_brechas(limite=limite)
+
+
+@app.get("/api/plan")
+def plan_hoy() -> dict[str, Any]:
+    return agente.plan_estudio_hoy()
+
+
+@app.get("/api/examenes")
+def listar_examenes(limite: int = 10) -> list[dict[str, Any]]:
+    return agente.ver_simulacros(limite=limite)
+
+
+@app.get("/api/examenes/{sesion_id}")
+def detalle_examen(sesion_id: int) -> dict[str, Any]:
+    try:
+        return agente.obtener_simulacro(sesion_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/temas/{tema_id}/relaciones")
+def relaciones_tema(tema_id: int) -> list[dict[str, Any]]:
+    return agente.listar_relaciones(tema_id=tema_id)
 
 
 # ---- rutas que escriben (requieren token si TUTOR_TOKEN está definido) -----------
@@ -362,6 +408,59 @@ def ingestar_material(body: MaterialEstudio) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/estudiar/diff", status_code=201, dependencies=[Depends(exigir_token)])
+def estudiar_diff(body: DiffEstudio) -> dict[str, Any]:
+    try:
+        return agente.estudiar_diff(
+            body.diff_texto, titulo=body.titulo, coleccion=body.coleccion, max_fichas=body.max_fichas
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/preguntas/{pregunta_id}/pista", dependencies=[Depends(exigir_token)])
+def pedir_pista(pregunta_id: int) -> dict[str, Any]:
+    try:
+        return agente.pedir_pista(pregunta_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/examenes", status_code=201, dependencies=[Depends(exigir_token)])
+def crear_examen(body: SimulacroBody) -> dict[str, Any]:
+    try:
+        return agente.iniciar_simulacro(
+            titulo=body.titulo,
+            cantidad=body.cantidad,
+            coleccion_id=body.coleccion_id,
+            categoria_devcards=body.categoria_devcards,
+            solo_brechas=body.solo_brechas,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/temas/relaciones", status_code=201, dependencies=[Depends(exigir_token)])
+def crear_relacion(body: RelacionBody) -> dict[str, Any]:
+    try:
+        return agente.vincular_temas(body.origen_id, body.destino_id, tipo=body.tipo)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/api/temas/relaciones/{relacion_id}", dependencies=[Depends(exigir_token)])
+def borrar_relacion(relacion_id: int) -> dict[str, Any]:
+    if not agente.borrar_relacion(relacion_id):
+        raise HTTPException(status_code=404, detail="No existe esa relación")
+    return {"borrado": relacion_id}
 
 
 # Evalúa tu respuesta con AgenteTutor.responder() y devuelve nota, explicación y nueva fecha SM-2.

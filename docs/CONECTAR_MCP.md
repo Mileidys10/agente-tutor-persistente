@@ -1,6 +1,6 @@
 # Conectar Agente Tutor Persistente vía MCP (v2.0)
 
-Este servidor implementa los **3 pilares oficiales de MCP** (`19 Tools`, `6 Resources` y `5 Prompts`) y funciona tanto en **local (`stdio`)** como en **remoto (`Streamable HTTP` en `/mcp`)**.
+Este servidor implementa los **3 pilares oficiales de MCP** (`25 Tools`, `8 Resources` y `7 Prompts`) y funciona tanto en **local (`stdio`)** como en **remoto (`Streamable HTTP` en `/mcp`)**.
 
 ---
 

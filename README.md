@@ -115,17 +115,18 @@ El archivo `render.yaml` define el Blueprint completo (`agente-tutor-persistente
 
 ---
 
-## Cómo conectar Claude Desktop, Claude Code, Cursor o Antigravity por MCP (v2.0)
+## Cómo conectar Claude Desktop, Claude Code, Cursor o Antigravity por MCP (v3.0)
 
-El agente expone **19 herramientas MCP** (con las 4 banderas booleanas de `ToolAnnotations`), **6 Resources (`tutor://*`)** y **5 Prompts pedagógicos** sobre la misma base de datos que la interfaz web. Consulta la guía completa en [`docs/CONECTAR_MCP.md`](docs/CONECTAR_MCP.md).
+El agente expone **25 herramientas MCP** (todas con las 4 banderas booleanas de `ToolAnnotations`), **8 Resources (`tutor://*`)** y **7 Prompts pedagógicos** sobre la misma base de datos que la interfaz web. Consulta la guía completa en [`docs/CONECTAR_MCP.md`](docs/CONECTAR_MCP.md).
 
-| Categoría | Capacidades MCP v2.0 |
+| Categoría | Capacidades MCP v3.0 |
 |---|---|
-| **Tools — Estudio e Ingesta** | `estudiar_codigo`, `ingestar_material`, `agregar_tema`, `ver_preguntas_pendientes`, `marcar_tarjeta_leida`, `responder_pregunta` |
-| **Tools — Colecciones y Gestión** | `gestionar_coleccion`, `buscar_temas`, `editar_tema`, `borrar_tema`, `posponer_tema`, `exportar_mazo`, `importar_mazo` |
+| **Tools — Estudio, Código y Diff** | `estudiar_codigo`, `estudiar_diff`, `ingestar_material`, `agregar_tema`, `ver_preguntas_pendientes`, `marcar_tarjeta_leida`, `pedir_pista`, `responder_pregunta` |
+| **Tools — Simulacros, Grafo y Plan** | `iniciar_simulacro`, `ver_simulacros`, `vincular_temas`, `plan_estudio_hoy` |
+| **Tools — Colecciones y Portabilidad** | `gestionar_coleccion`, `buscar_temas`, `editar_tema`, `borrar_tema`, `posponer_tema`, `exportar_mazo` (JSON/MD/Anki), `importar_mazo` |
 | **Tools — DevCards y Diagnóstico** | `ver_mazos`, `activar_mazo`, `ver_progreso`, `diagnosticar_brechas`, `ver_estado`, `ver_bitacora` |
-| **Resources (`tutor://*`)** | `tutor://estado`, `tutor://pendientes`, `tutor://colecciones`, `tutor://tema/{tema_id}`, `tutor://brechas`, `tutor://bitacora/reciente` |
-| **Prompts (`@mcp.prompt`)** | `sesion_repaso`, `aprender_codigo_generado`, `ingestar_apuntes`, `tutor_socratico`, `resumen_semanal` |
+| **Resources (`tutor://*`)** | `tutor://estado`, `tutor://pendientes`, `tutor://colecciones`, `tutor://tema/{tema_id}`, `tutor://brechas`, `tutor://bitacora/reciente`, `tutor://plan/hoy`, `tutor://examenes` |
+| **Prompts (`@mcp.prompt`)** | `sesion_repaso`, `aprender_codigo_generado`, `estudiar_ultimo_diff`, `ingestar_apuntes`, `tutor_socratico`, `entrevista_tecnica`, `resumen_semanal` |
 
 ### Conexión remota a Render (Streamable HTTP)
 
@@ -177,13 +178,16 @@ Para clientes locales como **Claude Desktop**, añade una entrada en `claude_des
 | `TUTOR_LEER_ANTES` | `1` | Exige leer la ficha de la DevCard nueva antes de responder (`0` desactiva este modo). |
 | `TUTOR_TOKEN` | `""` | Clave opcional exigida en `X-Tutor-Token` o `Authorization: Bearer` para rutas de escritura y `/mcp`. |
 | `TUTOR_AUTONOMO` | `1` | Pon `"0"` para desactivar el hilo autónomo en pruebas o entornos controlados. |
+| `TUTOR_META_DIARIA` | `10` | Meta de repasos diarios usada en el planificador y la barra de progreso. |
+| `TUTOR_WEBHOOK_URL` | `""` | URL opcional (http/https) para enviar máximo 1 recordatorio diario cuando haya repasos pendientes. |
 
 ---
 
-## Contrato API, Especificación v2.0 y privacidad
+## Contrato API, Especificaciones y privacidad
 
-- Especificación de producto v2.0 («Aprende lo que Construyes»): [`docs/PRD_V2.md`](docs/PRD_V2.md)
-- Casos de uso v1.1 y v2.0 (`CU-01` a `CU-16`): [`docs/CASOS_DE_USO.md`](docs/CASOS_DE_USO.md) y [`docs/CASOS_DE_USO_V2.md`](docs/CASOS_DE_USO_V2.md)
+- Especificaciones de producto: [`docs/PRD_V2.md`](docs/PRD_V2.md) y [`docs/PRD_V3.md`](docs/PRD_V3.md)
+- Casos de uso (`CU-01` a `CU-24`): [`docs/CASOS_DE_USO.md`](docs/CASOS_DE_USO.md), [`docs/CASOS_DE_USO_V2.md`](docs/CASOS_DE_USO_V2.md) y [`docs/CASOS_DE_USO_V3.md`](docs/CASOS_DE_USO_V3.md)
+- Sprint Log y Backlogs: [`tasks/SPRINT_LOG.md`](tasks/SPRINT_LOG.md), [`tasks/todo.md`](tasks/todo.md) y [`tasks/todo_v3.md`](tasks/todo_v3.md)
 - Guía de conexión MCP (`stdio` y remoto): [`docs/CONECTAR_MCP.md`](docs/CONECTAR_MCP.md)
 - Cómo funciona el programa por dentro: [`docs/COMO_FUNCIONA.md`](docs/COMO_FUNCIONA.md)
 - Especificación técnica de endpoints: [`docs/CONTRATO_API.md`](docs/CONTRATO_API.md)

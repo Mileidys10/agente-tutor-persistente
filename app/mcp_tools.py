@@ -407,7 +407,7 @@ def crear_servidor_mcp(agente: AgenteTutor) -> MCPServer:
 
     # 18. exportar_mazo
     @mcp.tool(
-        description="Exporta una colección completa y todas sus fichas en formato 'json' o 'md' (Markdown).",
+        description="Exporta una colección completa y todas sus fichas en formato 'json', 'md' (Markdown) o 'anki' (TSV).",
         annotations=ToolAnnotations(
             read_only_hint=True,
             destructive_hint=False,
@@ -437,8 +437,112 @@ def crear_servidor_mcp(agente: AgenteTutor) -> MCPServer:
             "omitidos": res["omitidos"],
         }
 
+    # 20. estudiar_diff (v3.0)
+    @mcp.tool(
+        description="Convierte un git diff real (entre commits o PR) en fichas de estudio por archivo modificado.",
+        annotations=ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=False,
+            idempotent_hint=False,
+            open_world_hint=False,
+        ),
+    )
+    def estudiar_diff(
+        diff_texto: str,
+        titulo: str = "",
+        coleccion: str = "Cambios Git (Diff)",
+        max_fichas: int = 5,
+    ) -> dict[str, Any]:
+        res = agente.estudiar_diff(
+            diff_texto[:30000], titulo=titulo[:200], coleccion=coleccion[:120], max_fichas=max(1, min(max_fichas, 10))
+        )
+        return {
+            "coleccion": _serializar_tema(res["coleccion"]) if res.get("coleccion") else None,
+            "fuente": res["fuente"],
+            "creadas": [{"id": t["id"], "nombre": t["nombre"], "lenguaje": t.get("lenguaje", "")} for t in res["creadas"]],
+            "omitidas": res["omitidas"],
+        }
+
+    # 21. pedir_pista (v3.0)
+    @mcp.tool(
+        description="Entrega una pista socrática progresiva (niveles 1 a 3) para una pregunta pendiente sin regalar la respuesta literal.",
+        annotations=ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=False,
+            idempotent_hint=False,
+            open_world_hint=False,
+        ),
+    )
+    def pedir_pista(pregunta_id: int) -> dict[str, Any]:
+        return agente.pedir_pista(pregunta_id)
+
+    # 22. iniciar_simulacro (v3.0)
+    @mcp.tool(
+        description="Inicia un simulacro de examen cronometrado (1-20 preguntas) filtrado por colección, DevCards o brechas.",
+        annotations=ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=False,
+            idempotent_hint=False,
+            open_world_hint=False,
+        ),
+    )
+    def iniciar_simulacro(
+        titulo: str = "Simulacro de estudio",
+        cantidad: int = 5,
+        coleccion_id: Optional[int] = None,
+        categoria_devcards: str = "",
+        solo_brechas: bool = False,
+    ) -> dict[str, Any]:
+        res = agente.iniciar_simulacro(
+            titulo=titulo[:160],
+            cantidad=cantidad,
+            coleccion_id=coleccion_id,
+            categoria_devcards=categoria_devcards,
+            solo_brechas=solo_brechas,
+        )
+        return {"sesion": _serializar_tema(res["sesion"]), "preguntas": res["preguntas"]}
+
+    # 23. ver_simulacros (v3.0)
+    @mcp.tool(
+        description="Lista los últimos simulacros de examen con porcentaje de aciertos, nota promedio y duración.",
+        annotations=ToolAnnotations(
+            read_only_hint=True,
+            destructive_hint=False,
+            idempotent_hint=True,
+            open_world_hint=False,
+        ),
+    )
+    def ver_simulacros(limite: int = 10) -> list[dict[str, Any]]:
+        return [_serializar_tema(s) for s in agente.ver_simulacros(limite=limite)]
+
+    # 24. vincular_temas (v3.0)
+    @mcp.tool(
+        description="Crea una relación entre dos temas en el grafo de conocimiento ('prerrequisito' o 'relacionado').",
+        annotations=ToolAnnotations(
+            read_only_hint=False,
+            destructive_hint=False,
+            idempotent_hint=True,
+            open_world_hint=False,
+        ),
+    )
+    def vincular_temas(origen_id: int, destino_id: int, tipo: str = "prerrequisito") -> dict[str, Any]:
+        return _serializar_tema(agente.vincular_temas(origen_id, destino_id, tipo=tipo))
+
+    # 25. plan_estudio_hoy (v3.0)
+    @mcp.tool(
+        description="Devuelve el plan de estudio diario, meta diaria, tiempo estimado, racha y pronóstico de los próximos 7 días.",
+        annotations=ToolAnnotations(
+            read_only_hint=True,
+            destructive_hint=False,
+            idempotent_hint=True,
+            open_world_hint=False,
+        ),
+    )
+    def plan_estudio_hoy() -> dict[str, Any]:
+        return agente.plan_estudio_hoy()
+
     # =========================================================================
-    # 6 MCP RESOURCES (contexto vivo en solo lectura)
+    # 8 MCP RESOURCES (contexto vivo en solo lectura)
     # =========================================================================
 
     @mcp.resource("tutor://estado", mime_type="application/json", description="Estado técnico, racha y progreso del tutor.")
@@ -469,8 +573,16 @@ def crear_servidor_mcp(agente: AgenteTutor) -> MCPServer:
     def recurso_bitacora() -> str:
         return _json_dumps(agente.memoria.leer_bitacora(25))
 
+    @mcp.resource("tutor://plan/hoy", mime_type="application/json", description="Meta diaria, tiempo estimado y pronóstico de 7 días.")
+    def recurso_plan_hoy() -> str:
+        return _json_dumps(agente.plan_estudio_hoy())
+
+    @mcp.resource("tutor://examenes", mime_type="application/json", description="Historial de simulacros de examen recientes.")
+    def recurso_examenes() -> str:
+        return _json_dumps(agente.ver_simulacros(10))
+
     # =========================================================================
-    # 5 MCP PROMPTS (flujos pedagógicos reutilizables)
+    # 7 MCP PROMPTS (flujos pedagógicos reutilizables)
     # =========================================================================
 
     @mcp.prompt(description="Guía una sesión interactiva de repaso SM-2 sin revelar respuestas.")
@@ -513,9 +625,26 @@ def crear_servidor_mcp(agente: AgenteTutor) -> MCPServer:
     @mcp.prompt(description="Genera un resumen semanal con racha, progreso y plan para superar brechas.")
     def resumen_semanal() -> str:
         return (
-            "Lee los recursos tutor://estado, tutor://brechas, tutor://colecciones y tutor://bitacora/reciente. "
-            "Entrega al estudiante un informe claro con su racha actual, temas dominados, brechas en refuerzo "
-            "y un plan concreto para los próximos 3 días."
+            "Lee los recursos tutor://estado, tutor://brechas, tutor://plan/hoy, tutor://colecciones y tutor://bitacora/reciente. "
+            "Entrega al estudiante un informe claro con su racha actual, meta diaria, temas dominados, brechas en refuerzo "
+            "y un plan concreto para los próximos 7 días."
+        )
+
+    @mcp.prompt(description="Convierte el git diff reciente del repositorio en fichas de estudio guiadas.")
+    def estudiar_ultimo_diff(coleccion: str = "Cambios Git (Diff)") -> str:
+        return (
+            f"Toma el git diff proporcionado por el usuario (o de su último commit) y llama a estudiar_diff "
+            f"guardándolo en la colección «{coleccion}». Luego explica en 3 líneas qué partes clave conviene repasar."
+        )
+
+    @mcp.prompt(description="Simula una entrevista técnica cronometrada usando el modo simulacro del tutor.")
+    def entrevista_tecnica(cantidad: int = 5, tema_foco: str = "") -> str:
+        foco = f" centrada en «{tema_foco}»" if tema_foco.strip() else ""
+        return (
+            f"Conduce un simulacro de entrevista técnica de {cantidad} preguntas{foco}. "
+            "1) Llama a iniciar_simulacro. 2) Haz cada pregunta una por una sin revelar respuestas. "
+            "3) Si el estudiante se bloquea, ofrece llamar a pedir_pista antes de rendirse. "
+            "4) Evalúa cada intento con responder_pregunta y al terminar muestra el puntaje final de ver_simulacros."
         )
 
     return mcp

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agente-tutor-persistente"
-version = "2.0.0"
+version = "3.0.0"
 description = "Agente tutor de estudio persistente con memoria en PostgreSQL/SQLite, repetición espaciada SM-2, ingesta de código/Markdown y servidor MCP completo."
 readme = "README.md"
 requires-python = ">=3.12"

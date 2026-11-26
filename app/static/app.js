@@ -515,6 +515,34 @@
     pTexto.tabIndex = -1;
     hijos.push(pTexto);
 
+    const cajaPista = crear("p", "caja-pista", "");
+    cajaPista.hidden = true;
+    const btnPista = crear("button", "btn btn-terciario", "Pedir pista");
+    btnPista.type = "button";
+    btnPista.addEventListener("click", async () => {
+      btnPista.disabled = true;
+      try {
+        const res = await peticion(
+          `/api/preguntas/${p.id}/pista`,
+          { method: "POST" },
+          () => btnPista.click()
+        );
+        cajaPista.textContent = res.pista;
+        cajaPista.hidden = false;
+        btnPista.textContent = res.pistas_restantes > 0 ? `Otra pista (${res.pistas_restantes})` : "Sin más pistas";
+        if (res.pistas_restantes <= 0) btnPista.disabled = true;
+      } catch (err) {
+        if (err.status !== 401) {
+          mostrarAvisoGlobal(err.message || "No se pudo obtener la pista.", true);
+        }
+      } finally {
+        if (btnPista.textContent !== "Sin más pistas") btnPista.disabled = false;
+      }
+    });
+    const filaPista = crear("div", "tema-acciones");
+    filaPista.appendChild(btnPista);
+    hijos.push(filaPista, cajaPista);
+
     if (Array.isArray(p.opciones) && p.opciones.length > 0) {
       hijos.push(crear("p", "opciones-titulo", "Elige una opción:"));
       const grid = crear("div", "opciones-grid");
@@ -929,7 +957,8 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${col.nombre.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.${formato}`;
+      const ext = formato === "anki" ? "tsv" : formato;
+      a.download = `${col.nombre.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.${ext}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1006,11 +1035,15 @@
       btnMd.type = "button";
       btnMd.addEventListener("click", () => exportarColeccionArchivo(c, "md"));
 
+      const btnAnki = crear("button", "btn btn-terciario", "Anki");
+      btnAnki.type = "button";
+      btnAnki.addEventListener("click", () => exportarColeccionArchivo(c, "anki"));
+
       const btnDel = crear("button", "btn btn-terciario", "Borrar");
       btnDel.type = "button";
       btnDel.addEventListener("click", () => borrarColeccion(c));
 
-      acciones.append(btnEst, btnJson, btnMd, btnDel);
+      acciones.append(btnEst, btnJson, btnMd, btnAnki, btnDel);
       fila.append(info, acciones);
       return fila;
     });
@@ -1342,11 +1375,119 @@
     await enviar();
   }
 
+  function renderizarPlanYSimulacros(plan, examenes) {
+    if (plan && el("badge-meta-hoy")) {
+      el("badge-meta-hoy").textContent = `${plan.respondidas_hoy} / ${plan.meta_diaria} hoy`;
+      el("plan-recomendacion").textContent = plan.recomendacion || "";
+      el("plan-barra").style.width = `${plan.progreso_meta_pct || 0}%`;
+      el("plan-barra-wrap").setAttribute("aria-valuenow", String(plan.progreso_meta_pct || 0));
+      const grid = el("plan-pronostico");
+      if (grid && Array.isArray(plan.pronostico_7_dias)) {
+        const nodos = plan.pronostico_7_dias.map((d, idx) =>
+          crear("span", "pildora pildora-neutra", `${idx === 0 ? "Hoy" : d.fecha.slice(5)}: ${d.vencen}`)
+        );
+        grid.replaceChildren(...nodos);
+      }
+    }
+    const lista = el("lista-examenes");
+    if (lista) {
+      if (!Array.isArray(examenes) || examenes.length === 0) {
+        lista.replaceChildren(crear("li", "texto-suave", "Sin simulacros realizados todavía."));
+      } else {
+        const nodos = examenes.map((ex) => {
+          const li = crear("li", "item-compacto");
+          li.appendChild(crear("strong", "", ex.titulo));
+          const txt = ex.estado === "completada"
+            ? `${ex.correctas}/${ex.total_preguntas} (${ex.porcentaje_aciertos ?? 0}%) · prom. ${ex.nota_promedio}/5`
+            : `${ex.respondidas}/${ex.total_preguntas} en curso`;
+          li.appendChild(crear("span", `pildora ${ex.estado === "completada" ? "pildora-ok" : "pildora-azul"}`, txt));
+          return li;
+        });
+        lista.replaceChildren(...nodos);
+      }
+    }
+  }
+
+  async function manejarEstudiarDiff(evento) {
+    evento.preventDefault();
+    const titulo = el("diff-titulo").value.trim();
+    const coleccion = el("diff-coleccion").value.trim() || "Cambios Git (Diff)";
+    const diffTexto = el("diff-texto").value;
+    const btn = el("btn-estudiar-diff");
+    const estado = el("estado-form-diff");
+
+    const enviar = async () => {
+      btn.disabled = true;
+      estado.textContent = "Analizando git diff...";
+      estado.className = "estado-inline";
+      try {
+        const res = await peticion(
+          "/api/estudiar/diff",
+          { method: "POST", body: JSON.stringify({ diff_texto: diffTexto, titulo, coleccion }) },
+          enviar
+        );
+        el("diff-titulo").value = "";
+        el("diff-texto").value = "";
+        const n = Array.isArray(res.creadas) ? res.creadas.length : 0;
+        estado.textContent = `${n} ficha(s) extraídas del diff (${res.fuente}).`;
+        mostrarAvisoGlobal(`${n} ficha(s) de diff guardadas.`);
+        await cargarTodo(true);
+      } catch (err) {
+        if (err.status !== 401) {
+          estado.textContent = err.message || "No se pudo procesar el diff.";
+          estado.className = "estado-inline es-error";
+        } else {
+          estado.textContent = "";
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    await enviar();
+  }
+
+  async function manejarIniciarSimulacro(evento) {
+    evento.preventDefault();
+    const titulo = el("sim-titulo").value.trim() || "Simulacro rápido";
+    const cantidad = Number(el("sim-cantidad").value || 5);
+    const soloBrechas = Boolean(el("sim-solo-brechas").checked);
+    const btn = el("btn-iniciar-simulacro");
+    const estado = el("estado-form-simulacro");
+
+    const enviar = async () => {
+      btn.disabled = true;
+      estado.textContent = "Preparando simulacro...";
+      estado.className = "estado-inline";
+      try {
+        const res = await peticion(
+          "/api/examenes",
+          { method: "POST", body: JSON.stringify({ titulo, cantidad, solo_brechas: soloBrechas }) },
+          enviar
+        );
+        const n = Array.isArray(res.preguntas) ? res.preguntas.length : 0;
+        estado.textContent = `Simulacro creado con ${n} pregunta(s) en «Estudiar».`;
+        mostrarAvisoGlobal(`Simulacro «${titulo}» listo (${n} preguntas).`);
+        await cargarTodo(true);
+      } catch (err) {
+        if (err.status !== 401) {
+          estado.textContent = err.message || "No se pudo iniciar el simulacro.";
+          estado.className = "estado-inline es-error";
+        } else {
+          estado.textContent = "";
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    await enviar();
+  }
+
   function activarTabCarga(tabId) {
     const mapa = [
       { tab: "tab-nota", panel: "panel-nota" },
       { tab: "tab-codigo", panel: "panel-codigo" },
       { tab: "tab-material", panel: "panel-material" },
+      { tab: "tab-diff", panel: "panel-diff" },
     ];
     for (const item of mapa) {
       const activo = item.tab === tabId;
@@ -1362,7 +1503,7 @@
     if (recargaEnCurso && !forzar) return;
     recargaEnCurso = true;
     try {
-      const [estado, pendientes, temas, colecciones, mazos, progreso, brechas, historial, bitacora] = await Promise.all([
+      const [estado, pendientes, temas, colecciones, mazos, progreso, brechas, plan, examenes, historial, bitacora] = await Promise.all([
         peticion("/api/estado"),
         peticion("/api/preguntas/pendientes"),
         peticion("/api/temas"),
@@ -1370,6 +1511,8 @@
         peticion("/api/mazos"),
         peticion("/api/progreso"),
         peticion("/api/brechas"),
+        peticion("/api/plan"),
+        peticion("/api/examenes?limite=5"),
         peticion("/api/historial?limite=6"),
         peticion("/api/bitacora?limite=40"),
       ]);
@@ -1380,6 +1523,7 @@
       renderizarColecciones(colecciones, forzar);
       renderizarMazos(mazos, forzar);
       renderizarProgreso(progreso, historial, brechas);
+      renderizarPlanYSimulacros(plan, examenes);
       renderizarBitacora(bitacora);
     } catch (err) {
       mostrarAvisoGlobal(err.message || "No se pudo consultar el estado del agente.", true);
@@ -1403,6 +1547,8 @@
     el("form-tema").addEventListener("submit", manejarAgregarTema);
     if (el("form-codigo")) el("form-codigo").addEventListener("submit", manejarEstudiarCodigo);
     if (el("form-material")) el("form-material").addEventListener("submit", manejarIngestarMaterial);
+    if (el("form-diff")) el("form-diff").addEventListener("submit", manejarEstudiarDiff);
+    if (el("form-simulacro")) el("form-simulacro").addEventListener("submit", manejarIniciarSimulacro);
     if (el("form-coleccion")) el("form-coleccion").addEventListener("submit", manejarCrearColeccion);
     if (el("form-importar")) el("form-importar").addEventListener("submit", manejarImportarMazo);
     if (el("btn-toggle-importar")) {
@@ -1413,7 +1559,7 @@
         el("btn-toggle-importar").setAttribute("aria-expanded", abierto ? "false" : "true");
       });
     }
-    for (const idTab of ["tab-nota", "tab-codigo", "tab-material"]) {
+    for (const idTab of ["tab-nota", "tab-codigo", "tab-material", "tab-diff"]) {
       if (el(idTab)) {
         el(idTab).addEventListener("click", () => activarTabCarga(idTab));
       }

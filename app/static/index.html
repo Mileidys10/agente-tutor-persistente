@@ -52,6 +52,7 @@
 
       <nav class="nav-secciones" aria-label="Secciones de la página">
         <a href="#seccion-estudiar">Estudiar</a>
+        <a href="#seccion-simulacro">Simulacro y Plan</a>
         <a href="#seccion-temas">Mis temas y código</a>
         <a href="#seccion-colecciones">Colecciones</a>
         <a href="#seccion-mazos">Mazos DevCards</a>
@@ -143,6 +144,7 @@
         <button type="button" id="tab-nota" class="tab-btn" role="tab" aria-selected="true" aria-controls="panel-nota">Nota rápida</button>
         <button type="button" id="tab-codigo" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-codigo">Estudiar código</button>
         <button type="button" id="tab-material" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-material">Ingestar apuntes</button>
+        <button type="button" id="tab-diff" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-diff">Estudiar git diff</button>
       </div>
 
       <div id="panel-nota" role="tabpanel" aria-labelledby="tab-nota">
@@ -231,6 +233,30 @@
         </form>
       </div>
 
+      <div id="panel-diff" role="tabpanel" aria-labelledby="tab-diff" hidden>
+        <form id="form-diff" class="formulario-tema">
+          <div class="fila-doble">
+            <div class="campo">
+              <label for="diff-titulo">Título del cambio o PR (opcional)</label>
+              <input id="diff-titulo" type="text" maxlength="200" placeholder="Ej. Fix autenticación JWT">
+            </div>
+            <div class="campo">
+              <label for="diff-coleccion">Colección destino</label>
+              <input id="diff-coleccion" type="text" maxlength="120" value="Cambios Git (Diff)" placeholder="Cambios Git (Diff)">
+            </div>
+          </div>
+          <div class="campo">
+            <label for="diff-texto">Salida de git diff (15 a 30 000 caracteres)</label>
+            <textarea id="diff-texto" class="codigo-input" rows="5" minlength="15" maxlength="30000" required
+                      placeholder="Pega aquí la salida de `git diff` para estudiar los cambios reales..."></textarea>
+          </div>
+          <div class="fila-acciones-form">
+            <button type="submit" id="btn-estudiar-diff" class="btn btn-primario">Extraer fichas del diff</button>
+            <p id="estado-form-diff" class="estado-inline" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </div>
+
       <div class="barra-filtros-temas">
         <div class="campo">
           <label for="filtro-temas">Buscar en mis temas</label>
@@ -309,7 +335,48 @@
       </div>
     </section>
 
-    <!-- 5. MAZOS DEVCARDS -->
+    <!-- 5. SIMULACRO Y PLAN DIARIO (v3.0) -->
+    <section id="seccion-simulacro" class="panel" aria-labelledby="titulo-simulacro">
+      <div class="panel-cabecera">
+        <h2 id="titulo-simulacro">Simulacro y Plan Diario</h2>
+        <span id="badge-meta-hoy" class="pildora pildora-azul">0 / 10 hoy</span>
+      </div>
+
+      <div class="plan-caja">
+        <p id="plan-recomendacion" class="texto-suave">Calculando plan de estudio...</p>
+        <div class="barra-meta" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="plan-barra-wrap">
+          <div id="plan-barra" class="barra-meta-relleno"></div>
+        </div>
+        <div id="plan-pronostico" class="pronostico-grid" aria-label="Pronóstico de los próximos 7 días"></div>
+      </div>
+
+      <form id="form-simulacro" class="formulario-tema">
+        <div class="fila-doble">
+          <div class="campo">
+            <label for="sim-titulo">Nombre del simulacro</label>
+            <input id="sim-titulo" type="text" maxlength="160" value="Simulacro rápido" placeholder="Ej. Entrevista Python">
+          </div>
+          <div class="campo">
+            <label for="sim-cantidad">Preguntas (1–20)</label>
+            <input id="sim-cantidad" type="number" min="1" max="20" value="5">
+          </div>
+        </div>
+        <div class="fila-acciones-form">
+          <label class="check-inline">
+            <input id="sim-solo-brechas" type="checkbox"> Solo temas difíciles / brechas
+          </label>
+          <button type="submit" id="btn-iniciar-simulacro" class="btn btn-primario">Iniciar simulacro</button>
+          <p id="estado-form-simulacro" class="estado-inline" role="status" aria-live="polite"></p>
+        </div>
+      </form>
+
+      <h3 class="subtitulo-lista">Últimos simulacros</h3>
+      <ul id="lista-examenes" class="lista-compacta">
+        <li class="texto-suave">Sin simulacros realizados todavía.</li>
+      </ul>
+    </section>
+
+    <!-- 6. MAZOS DEVCARDS -->
     <section id="seccion-mazos" class="panel" aria-labelledby="titulo-mazos">
       <div class="panel-cabecera">
         <h2 id="titulo-mazos">Mazos DevCards</h2>
@@ -342,7 +409,7 @@
   <footer class="pie">
     <div class="contenedor pie-interior">
       <p>
-        Agente Tutor Persistente v2.0 · Repetición espaciada SM-2 · Banco
+        Agente Tutor Persistente v3.0 · Repetición espaciada SM-2 · Banco
         <span id="pie-devcards">1 295</span> DevCards (MIT).
       </p>
       <p class="pie-enlaces">

@@ -75,6 +75,34 @@ temas = Table(
     Column("creado", DateTime(timezone=True), nullable=False),
 )
 
+# Tabla de sesiones de simulacro/examen cronometrado.
+sesiones_examen = Table(
+    "sesiones_examen",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("titulo", String(160), nullable=False),
+    Column("filtro", String(160), nullable=False, default=""),
+    Column("total_preguntas", Integer, nullable=False),
+    Column("respondidas", Integer, nullable=False, default=0),
+    Column("correctas", Integer, nullable=False, default=0),
+    Column("nota_promedio", Float, nullable=False, default=0.0),
+    Column("estado", String(20), nullable=False, default="activa"),  # activa | completada
+    Column("creada", DateTime(timezone=True), nullable=False),
+    Column("completada_en", DateTime(timezone=True)),
+    Column("resumen_json", Text, nullable=False, default="{}"),
+)
+
+# Tabla de relaciones/grafo de prerrequisitos entre temas.
+relaciones_temas = Table(
+    "relaciones_temas",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("origen_id", Integer, ForeignKey("temas.id", ondelete="CASCADE"), nullable=False),
+    Column("destino_id", Integer, ForeignKey("temas.id", ondelete="CASCADE"), nullable=False),
+    Column("tipo", String(20), nullable=False, default="prerrequisito"),  # prerrequisito | relacionado
+    Column("creado", DateTime(timezone=True), nullable=False),
+)
+
 # Tabla 2: cola de preguntas creadas por el agente; quedan en "pendiente" hasta que las respondes.
 preguntas = Table(
     "preguntas",
@@ -90,6 +118,8 @@ preguntas = Table(
     Column("explicacion", Text, nullable=False, default=""),  # idea clave que se muestra al corregir
     Column("requiere_lectura", Integer, nullable=False, default=0),  # 1: DevCard nueva que se lee antes del quiz
     Column("leida_en", DateTime(timezone=True)),  # cuándo la persona marcó la tarjeta como leída
+    Column("pistas_usadas", Integer, nullable=False, default=0),
+    Column("sesion_examen_id", Integer, ForeignKey("sesiones_examen.id", ondelete="SET NULL"), nullable=True),
     Column("creada", DateTime(timezone=True), nullable=False),
     Column("respondida_en", DateTime(timezone=True)),
 )
@@ -135,6 +165,7 @@ latido = Table(
     Column("ultimo_ciclo", DateTime(timezone=True)),
     Column("ciclos", Integer, nullable=False, default=0),
     Column("arranques", Integer, nullable=False, default=0),
+    Column("ultima_notificacion", String(10), nullable=False, default=""),
 )
 
 # Tabla 7: registro por fecha UTC para calcular rachas de estudio diarias.
@@ -196,6 +227,8 @@ class Memoria:
         "preguntas": {
             "requiere_lectura": "INTEGER NOT NULL DEFAULT 0",
             "leida_en": {"postgresql": "TIMESTAMP WITH TIME ZONE", "default": "TIMESTAMP"},
+            "pistas_usadas": "INTEGER NOT NULL DEFAULT 0",
+            "sesion_examen_id": "INTEGER",
         },
         "temas": {
             "tipo": "VARCHAR(20) NOT NULL DEFAULT 'nota'",
@@ -207,6 +240,9 @@ class Memoria:
             "etiquetas": "TEXT NOT NULL DEFAULT ''",
             "en_refuerzo": "INTEGER NOT NULL DEFAULT 0",
             "aciertos_seguidos": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "latido": {
+            "ultima_notificacion": "VARCHAR(10) NOT NULL DEFAULT ''",
         },
     }
 
@@ -475,6 +511,11 @@ class Memoria:
     # Elimina un tema junto con sus preguntas y respuestas (DELETE /api/temas/{id} en app/main.py).
     def borrar_tema(self, tema_id: int) -> bool:
         with self.engine.begin() as c:  # borrado explícito en cascada (SQLite no aplica ON DELETE por defecto)
+            c.execute(
+                relaciones_temas.delete().where(
+                    or_(relaciones_temas.c.origen_id == tema_id, relaciones_temas.c.destino_id == tema_id)
+                )
+            )
             ids = select(preguntas.c.id).where(preguntas.c.tema_id == tema_id)
             c.execute(respuestas.delete().where(respuestas.c.pregunta_id.in_(ids)))
             c.execute(preguntas.delete().where(preguntas.c.tema_id == tema_id))
@@ -512,6 +553,7 @@ class Memoria:
     def crear_pregunta(
         self, tema_id: int, texto: str, esperada: str, motivo: str, fuente: str,
         opciones: Optional[list[str]] = None, explicacion: str = "", requiere_lectura: bool = False,
+        sesion_examen_id: Optional[int] = None,
     ) -> dict[str, Any]:
         with self.engine.begin() as c:
             pid = c.execute(
@@ -520,6 +562,8 @@ class Memoria:
                     estado="pendiente", fuente=fuente, creada=ahora(),
                     opciones=json.dumps(opciones, ensure_ascii=False) if opciones else None, explicacion=explicacion,
                     requiere_lectura=1 if requiere_lectura else 0,
+                    pistas_usadas=0,
+                    sesion_examen_id=sesion_examen_id,
                 )
             ).inserted_primary_key[0]
         return self.obtener_pregunta(int(pid))  # type: ignore[return-value]
@@ -707,3 +751,159 @@ class Memoria:
             racha += 1
             cursor = cursor - timedelta(days=1)
         return racha
+
+    def actividad_de_hoy(self, hoy_dt: Optional[datetime] = None) -> dict[str, int]:
+        clave = (_utc(hoy_dt) or ahora()).strftime("%Y-%m-%d")
+        with self.engine.connect() as c:
+            fila = c.execute(select(actividad_diaria).where(actividad_diaria.c.fecha == clave)).first()
+        if not fila:
+            return {"respuestas": 0, "aciertos": 0}
+        return {"respuestas": int(fila.respuestas or 0), "aciertos": int(fila.aciertos or 0)}
+
+    def registrar_notificacion(self, fecha_str: str) -> None:
+        with self.engine.begin() as c:
+            c.execute(update(latido).where(latido.c.id == 1).values(ultima_notificacion=fecha_str[:10]))
+
+    # ---- pistas progresivas, relaciones de temas y simulacros (v3.0) --------
+    def incrementar_pistas(self, pregunta_id: int) -> int:
+        with self.engine.begin() as c:
+            fila = c.execute(
+                select(preguntas.c.estado, preguntas.c.pistas_usadas).where(preguntas.c.id == pregunta_id)
+            ).first()
+            if fila is None:
+                raise LookupError("No existe esa pregunta")
+            if fila.estado != "pendiente":
+                raise ValueError("La pregunta ya fue respondida")
+            actual = int(fila.pistas_usadas or 0)
+            nuevo = min(3, actual + 1)
+            if nuevo != actual:
+                c.execute(update(preguntas).where(preguntas.c.id == pregunta_id).values(pistas_usadas=nuevo))
+            return nuevo
+
+    def crear_relacion(self, origen_id: int, destino_id: int, tipo: str = "prerrequisito") -> dict[str, Any]:
+        if origen_id == destino_id:
+            raise ValueError("Un tema no puede ser prerrequisito de sí mismo")
+        tipo_limpio = tipo.strip().lower()
+        if tipo_limpio not in ("prerrequisito", "relacionado"):
+            raise ValueError("El tipo debe ser 'prerrequisito' o 'relacionado'")
+        with self.engine.begin() as c:
+            if not c.execute(select(temas.c.id).where(temas.c.id == origen_id)).first():
+                raise LookupError(f"No existe el tema origen {origen_id}")
+            if not c.execute(select(temas.c.id).where(temas.c.id == destino_id)).first():
+                raise LookupError(f"No existe el tema destino {destino_id}")
+            dup = c.execute(
+                select(relaciones_temas.c.id).where(
+                    relaciones_temas.c.origen_id == origen_id,
+                    relaciones_temas.c.destino_id == destino_id,
+                    relaciones_temas.c.tipo == tipo_limpio,
+                )
+            ).first()
+            if dup:
+                return _fila(c.execute(select(relaciones_temas).where(relaciones_temas.c.id == dup[0])).first())
+            if tipo_limpio == "prerrequisito":
+                ciclo = c.execute(
+                    select(relaciones_temas.c.id).where(
+                        relaciones_temas.c.origen_id == destino_id,
+                        relaciones_temas.c.destino_id == origen_id,
+                        relaciones_temas.c.tipo == "prerrequisito",
+                    )
+                ).first()
+                if ciclo:
+                    raise ValueError("Ciclo detectado: el tema destino ya es prerrequisito del origen")
+            rid = c.execute(
+                relaciones_temas.insert().values(
+                    origen_id=origen_id, destino_id=destino_id, tipo=tipo_limpio, creado=ahora()
+                )
+            ).inserted_primary_key[0]
+            fila = c.execute(select(relaciones_temas).where(relaciones_temas.c.id == rid)).first()
+            return _fila(fila)
+
+    def listar_relaciones(self, tema_id: Optional[int] = None) -> list[dict[str, Any]]:
+        stmt = select(relaciones_temas)
+        if tema_id is not None:
+            stmt = stmt.where(
+                or_(relaciones_temas.c.origen_id == tema_id, relaciones_temas.c.destino_id == tema_id)
+            )
+        with self.engine.connect() as c:
+            return [_fila(f) for f in c.execute(stmt.order_by(relaciones_temas.c.id.asc()))]
+
+    def borrar_relacion(self, relacion_id: int) -> bool:
+        with self.engine.begin() as c:
+            return c.execute(relaciones_temas.delete().where(relaciones_temas.c.id == relacion_id)).rowcount > 0
+
+    def crear_sesion_examen(self, titulo: str, filtro: str, total_preguntas: int) -> dict[str, Any]:
+        with self.engine.begin() as c:
+            sid = c.execute(
+                sesiones_examen.insert().values(
+                    titulo=titulo.strip()[:160] or "Simulacro",
+                    filtro=filtro.strip()[:160],
+                    total_preguntas=total_preguntas,
+                    respondidas=0,
+                    correctas=0,
+                    nota_promedio=0.0,
+                    estado="activa",
+                    creada=ahora(),
+                    resumen_json=json.dumps({"fallados": []}, ensure_ascii=False),
+                )
+            ).inserted_primary_key[0]
+        return self.obtener_sesion_examen(int(sid))  # type: ignore[return-value]
+
+    def obtener_sesion_examen(self, sesion_id: int) -> Optional[dict[str, Any]]:
+        with self.engine.connect() as c:
+            fila = c.execute(select(sesiones_examen).where(sesiones_examen.c.id == sesion_id)).first()
+        if not fila:
+            return None
+        d = _fila(fila)
+        try:
+            d["resumen"] = json.loads(d.get("resumen_json") or "{}")
+        except json.JSONDecodeError:
+            d["resumen"] = {}
+        return d
+
+    def listar_sesiones_examen(self, limite: int = 10) -> list[dict[str, Any]]:
+        with self.engine.connect() as c:
+            filas = c.execute(select(sesiones_examen).order_by(sesiones_examen.c.id.desc()).limit(limite)).all()
+        res = []
+        for f in filas:
+            d = _fila(f)
+            try:
+                d["resumen"] = json.loads(d.get("resumen_json") or "{}")
+            except json.JSONDecodeError:
+                d["resumen"] = {}
+            res.append(d)
+        return res
+
+    def registrar_avance_examen(self, sesion_id: int, nota: int, tema_nombre: str) -> Optional[dict[str, Any]]:
+        with self.engine.begin() as c:
+            fila = c.execute(select(sesiones_examen).where(sesiones_examen.c.id == sesion_id)).first()
+            if fila is None:
+                return None
+            resp_prev = int(fila.respondidas or 0)
+            corr_prev = int(fila.correctas or 0)
+            prom_prev = float(fila.nota_promedio or 0.0)
+            total = int(fila.total_preguntas or 1)
+            nuevo_resp = resp_prev + 1
+            nuevo_corr = corr_prev + (1 if nota >= 3 else 0)
+            nuevo_prom = round(((prom_prev * resp_prev) + nota) / nuevo_resp, 2)
+            try:
+                resumen = json.loads(fila.resumen_json or "{}")
+            except json.JSONDecodeError:
+                resumen = {}
+            fallados = list(resumen.get("fallados") or [])
+            if nota < 3 and tema_nombre not in fallados:
+                fallados.append(tema_nombre)
+            resumen["fallados"] = fallados
+            completo = nuevo_resp >= total
+            c.execute(
+                update(sesiones_examen)
+                .where(sesiones_examen.c.id == sesion_id)
+                .values(
+                    respondidas=nuevo_resp,
+                    correctas=nuevo_corr,
+                    nota_promedio=nuevo_prom,
+                    estado="completada" if completo else "activa",
+                    completada_en=ahora() if completo else fila.completada_en,
+                    resumen_json=json.dumps(resumen, ensure_ascii=False),
+                )
+            )
+        return self.obtener_sesion_examen(sesion_id)

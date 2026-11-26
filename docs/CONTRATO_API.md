@@ -16,7 +16,11 @@ Si el servidor define `TUTOR_TOKEN`, las rutas que **escriben** exigen la cabece
 | `GET /api/preguntas/pendientes` | `[{id, tema_id, tema, texto, opciones: [str] \| null, motivo, fuente: "gemini"\|"local"\|"devcards", creada, requiere_lectura, lectura}]` (nunca incluye la respuesta) |
 | `GET /api/temas?q=&coleccion_id=&tipo=` | `[{id, nombre, notas, origen, tipo, coleccion_id, codigo, lenguaje, analogia, idea_clave, etiquetas, en_refuerzo, repeticiones, intervalo_dias, facilidad, proximo_repaso, aciertos, fallos, creado}]` |
 | `GET /api/colecciones` | `[{id, nombre, descripcion, activa, creada, temas, dominados, en_refuerzo}]` |
-| `GET /api/colecciones/{id}/exportar?formato=json\|md` | Paquete JSON `{version, coleccion, fichas}` o texto `text/markdown` (`404` si no existe, `422` formato inválido) |
+| `GET /api/colecciones/{id}/exportar?formato=json\|md\|anki` | Paquete JSON, Markdown o TSV para Anki (`404` si no existe, `422` formato inválido) |
+| `GET /api/plan` | `{fecha, meta_diaria, respondidas_hoy, aciertos_hoy, progreso_meta_pct, pendientes_ahora, vencidos_ahora, minutos_estimados, racha_dias, pronostico_7_dias, colecciones_activas, recomendacion}` |
+| `GET /api/examenes?limite=10` | Lista de sesiones de simulacro con `porcentaje_aciertos`, `nota_promedio` y `duracion_s` |
+| `GET /api/examenes/{sesion_id}` | Detalle de un simulacro específico (`404` si no existe) |
+| `GET /api/temas/{tema_id}/relaciones` | Relaciones de prerrequisitos/afinidad asociadas al tema |
 | `GET /api/historial?limite=20` | `[{id, pregunta_id, texto, nota, retroalimentacion, fecha, pregunta, respuesta_esperada, tema}]` |
 | `GET /api/bitacora?limite=40` | `[{id, fecha, tipo: "sistema"\|"ciclo"\|"decision"\|"pregunta"\|"evaluacion"\|"reflexion"\|"error", detalle}]`, el más reciente primero |
 | `GET /api/mazos` | `[{categoria, tarjetas, activo, introducidas}]` (42 categorías, 1 295 tarjetas) |
@@ -36,17 +40,22 @@ Si el servidor define `TUTOR_TOKEN`, las rutas que **escriben** exigen la cabece
 | `POST /api/colecciones/importar` | `{datos, formato: "json"\|"md", nombre_coleccion?}` | `201 {coleccion, importados, omitidos}` · `422` |
 | `POST /api/estudiar/codigo` | `{codigo (10-12000), titulo?, lenguaje?, coleccion?, objetivo?, max_fichas (1-10)}` | `201 {coleccion, fuente, creadas, omitidas}` · `422` |
 | `POST /api/estudiar/material` | `{contenido (20-25000), titulo?, coleccion?, max_fichas (1-15)}` | `201 {coleccion, fuente, creadas, omitidas}` · `422` |
+| `POST /api/estudiar/diff` | `{diff_texto (15-30000), titulo?, coleccion?, max_fichas (1-10)}` | `201 {coleccion, fuente, creadas, omitidas}` · `422` |
+| `POST /api/preguntas/{id}/pista` | — | `200 {pregunta_id, nivel (1-3), pistas_usadas, pistas_restantes, pista}` · `404` · `409` |
+| `POST /api/examenes` | `{titulo?, cantidad (1-20), coleccion_id?, categoria_devcards?, solo_brechas?}` | `201 {sesion, preguntas}` · `404` · `422` |
+| `POST /api/temas/relaciones` | `{origen_id, destino_id, tipo: "prerrequisito"\|"relacionado"}` | `201` relación · `404` · `422` si hay ciclo |
+| `DELETE /api/temas/relaciones/{id}` | — | `{borrado}` · `404` |
 | `POST /api/preguntas/{id}/responder` | `{respuesta (≤2000)}` | `{pregunta_id, tema, nota 0-5, correcta, retroalimentacion, respuesta_esperada, evaluado_por, intervalo_dias, facilidad, proximo_repaso}` · `404` · `409` si ya se respondió |
 | `PUT /api/mazos/{categoria}` | `{activo: bool}` | `{categoria, activo}` · `404`. La categoría va con `encodeURIComponent`. |
 | `POST /api/ciclo` | — | `{preguntas_creadas:[...], pendientes, vencidos}`: fuerza un ciclo del agente ya |
 
 En las preguntas de opción múltiple (`opciones` no es null), la respuesta se envía como la **letra** (`"A"`, `"B"`...).
 
-## MCP (v2.0)
+## MCP (v3.0)
 `POST /mcp` (Streamable HTTP, con `Authorization: Bearer <TUTOR_TOKEN>`).
-- **19 Tools** (todas con las 4 `ToolAnnotations` booleanas): `agregar_tema`, `ver_preguntas_pendientes`, `marcar_tarjeta_leida`, `responder_pregunta`, `ver_mazos`, `activar_mazo`, `ver_progreso`, `ver_estado`, `ver_bitacora`, `estudiar_codigo`, `ingestar_material`, `gestionar_coleccion`, `buscar_temas`, `editar_tema`, `borrar_tema`, `posponer_tema`, `diagnosticar_brechas`, `exportar_mazo`, `importar_mazo`.
-- **6 Resources**: `tutor://estado`, `tutor://pendientes`, `tutor://colecciones`, `tutor://tema/{tema_id}`, `tutor://brechas`, `tutor://bitacora/reciente`.
-- **5 Prompts**: `sesion_repaso`, `aprender_codigo_generado`, `ingestar_apuntes`, `tutor_socratico`, `resumen_semanal`.
+- **25 Tools** (todas con las 4 `ToolAnnotations` booleanas): `agregar_tema`, `ver_preguntas_pendientes`, `marcar_tarjeta_leida`, `responder_pregunta`, `ver_mazos`, `activar_mazo`, `ver_progreso`, `ver_estado`, `ver_bitacora`, `estudiar_codigo`, `ingestar_material`, `gestionar_coleccion`, `buscar_temas`, `editar_tema`, `borrar_tema`, `posponer_tema`, `diagnosticar_brechas`, `exportar_mazo`, `importar_mazo`, `estudiar_diff`, `pedir_pista`, `iniciar_simulacro`, `ver_simulacros`, `vincular_temas`, `plan_estudio_hoy`.
+- **8 Resources**: `tutor://estado`, `tutor://pendientes`, `tutor://colecciones`, `tutor://tema/{tema_id}`, `tutor://brechas`, `tutor://bitacora/reciente`, `tutor://plan/hoy`, `tutor://examenes`.
+- **7 Prompts**: `sesion_repaso`, `aprender_codigo_generado`, `ingestar_apuntes`, `tutor_socratico`, `resumen_semanal`, `estudiar_ultimo_diff`, `entrevista_tecnica`.
 Local por stdio: `agente-tutor-mcp` o `python -m app.mcp_tools`.
 
 ## Modo "leer antes de responder" (v1.1)

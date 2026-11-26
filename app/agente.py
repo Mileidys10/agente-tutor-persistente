@@ -24,6 +24,7 @@ from typing import Any, Optional
 from app.banco_devcards import LETRAS, BancoDevCards
 from app.cerebro import Cerebro, _normalizar
 from app.config import Config
+from app.ingesta import generar_pista_progresiva
 from app.memoria import Memoria, ahora
 from app import sm2
 
@@ -133,20 +134,36 @@ class AgenteTutor:
             # REFLEXIONAR: detecta temas con fallos persistentes y activa refuerzo guiado
             self._reflexionar(temas)
 
-            # DECIDIR (1): repasos vencidos, primero los más atrasados y los más difíciles.
-            # Calcula una puntuación combinando días de atraso, facilidad baja y cantidad de fallos.
+            # DECIDIR (1): repasos vencidos, priorizando prerrequisitos no dominados + atraso + dificultad.
+            por_id_tema = {int(x["id"]): x for x in temas}
+            vencidos_ids = {int(x["id"]) for x in vencidos}
+            boost_prereq: dict[int, list[str]] = {}
+            for rel in self.memoria.listar_relaciones():
+                if rel.get("tipo") != "prerrequisito":
+                    continue
+                oid, did = int(rel["origen_id"]), int(rel["destino_id"])
+                if oid in vencidos_ids and did in vencidos_ids:
+                    orig = por_id_tema.get(oid)
+                    dest = por_id_tema.get(did)
+                    if orig and dest and (float(orig["intervalo_dias"]) < 1 or orig.get("en_refuerzo")):
+                        boost_prereq.setdefault(oid, []).append(str(dest["nombre"]))
+
             def prioridad(x: dict[str, Any]) -> float:
                 dias_retraso = (t - x["proximo_repaso"]).total_seconds() / 60 / self.config.minutos_por_dia
-                return dias_retraso + 2 * (2.5 - float(x["facilidad"])) + 0.5 * int(x["fallos"])
+                base = dias_retraso + 2 * (2.5 - float(x["facilidad"])) + 0.5 * int(x["fallos"])
+                return base + (50.0 if int(x["id"]) in boost_prereq else 0.0)
 
             # Genera preguntas para los temas vencidos más urgentes mientras haya cupo disponible.
             for tema in sorted(vencidos, key=prioridad, reverse=True)[:cupo]:
                 retraso = (t - tema["proximo_repaso"]).total_seconds() / 60
+                prefijo_prereq = ""
+                if int(tema["id"]) in boost_prereq:
+                    prefijo_prereq = f"Prerrequisito para «{boost_prereq[int(tema['id'])][0]}». "
                 if tema["repeticiones"] == 0 and tema["aciertos"] + tema["fallos"] == 0:
-                    motivo = f"Tema nuevo «{tema['nombre']}»: primera pregunta."
+                    motivo = f"{prefijo_prereq}Tema nuevo «{tema['nombre']}»: primera pregunta."
                 else:
                     motivo = (
-                        f"Repaso de «{tema['nombre']}»: le tocaba {_hace(retraso)}; facilidad {tema['facilidad']:.2f}, "
+                        f"{prefijo_prereq}Repaso de «{tema['nombre']}»: le tocaba {_hace(retraso)}; facilidad {tema['facilidad']:.2f}, "
                         f"{tema['fallos']} fallos y {tema['aciertos']} aciertos (prioridad {prioridad(tema):.2f})."
                     )
                 acciones.append(self._preparar_pregunta(tema, motivo))
@@ -177,6 +194,7 @@ class AgenteTutor:
 
             # ACTUAR ya ocurrió en _preparar_pregunta; ahora queda el latido.
             self.memoria.registrar_ciclo()
+            total_pend = len(pendientes) + len(acciones)
             if acciones:
                 self._ciclos_sin_novedad = 0
             else:
@@ -188,7 +206,8 @@ class AgenteTutor:
                         if proximo and proximo > t else "no hay repasos programados"
                     )
                     self.memoria.anotar("ciclo", f"Sigo vivo: {len(pendientes)} preguntas esperando respuesta; {falta}.")
-            return {"preguntas_creadas": acciones, "pendientes": len(pendientes) + len(acciones), "vencidos": len(vencidos)}
+            self._notificar_si_corresponde(total_pend, len(vencidos))
+            return {"preguntas_creadas": acciones, "pendientes": total_pend, "vencidos": len(vencidos)}
 
     # Evita llenar la bitácora con el mismo aviso repetido cada 20 segundos cuando nada cambia.
     def _anotar_una_vez(self, tipo: str, detalle: str) -> None:
@@ -275,6 +294,14 @@ class AgenteTutor:
                 if p.get("explicacion"):
                     retro = f"{retro} Idea clave: {p['explicacion']}"
 
+            pistas = int(p.get("pistas_usadas") or 0)
+            if pistas == 1 and nota > 4:
+                nota = 4
+                retro = f"{retro} (Ajuste SM-2 a 4/5 por 1 pista usada)."
+            elif pistas >= 2 and nota > 3:
+                nota = 3
+                retro = f"{retro} (Ajuste SM-2 a 3/5 por {pistas} pistas usadas)."
+
             self.memoria.registrar_respuesta(pregunta_id, texto, nota, retro)
             nuevo = sm2.actualizar(
                 sm2.EstadoSM2(int(tema["repeticiones"]), float(tema["intervalo_dias"]), float(tema["facilidad"])), nota
@@ -285,6 +312,11 @@ class AgenteTutor:
                 proximo, acierto=nota >= 3, nota=nota,
             )
             self.memoria.registrar_actividad_diaria(acierto=nota >= 3)
+            examen_actualizado = None
+            if p.get("sesion_examen_id"):
+                examen_actualizado = self.memoria.registrar_avance_examen(
+                    int(p["sesion_examen_id"]), nota, str(tema["nombre"])
+                )
             self.memoria.anotar(
                 "evaluacion",
                 f"«{tema['nombre']}»: nota {nota}/5 ({fuente}). Próximo repaso en {nuevo.intervalo_dias:g} día(s) "
@@ -295,7 +327,7 @@ class AgenteTutor:
                     "reflexion",
                     f"«{tema['nombre']}» superó la brecha tras 2 aciertos sólidos seguidos; sale de modo refuerzo.",
                 )
-            return {
+            salida: dict[str, Any] = {
                 "pregunta_id": pregunta_id,
                 "tema": tema["nombre"],
                 "nota": nota,
@@ -303,10 +335,14 @@ class AgenteTutor:
                 "retroalimentacion": retro,
                 "respuesta_esperada": p["respuesta_esperada"],
                 "evaluado_por": fuente,
+                "pistas_usadas": pistas,
                 "intervalo_dias": nuevo.intervalo_dias,
                 "facilidad": nuevo.facilidad,
                 "proximo_repaso": proximo,
             }
+            if examen_actualizado is not None:
+                salida["simulacro"] = examen_actualizado
+            return salida
 
     # La llaman POST /api/preguntas/{id}/leida y la herramienta MCP marcar_tarjeta_leida cuando pulsas "Ya la leí".
     # Desbloquea la pregunta guardando la hora en leida_en y deja constancia en la bitácora.
@@ -552,7 +588,24 @@ class AgenteTutor:
                 if f.get("idea_clave"):
                     lineas.extend(["", f"**Idea clave:** {f['idea_clave']}"])
             return "\n".join(lineas).strip() + "\n"
-        raise ValueError("Formato no soportado; usa 'json' o 'md'")
+        if fmt == "anki":
+            filas_tsv: list[str] = []
+            for f in fichas:
+                frente = str(f.get("nombre") or "").replace("\t", " ").replace("\n", "<br>").strip()
+                partes_back = [str(f.get("notas") or "")]
+                if f.get("codigo"):
+                    partes_back.append(f"<pre><code>{f['codigo']}</code></pre>")
+                if f.get("idea_clave"):
+                    partes_back.append(f"Idea clave: {f['idea_clave']}")
+                reverso = "<br>".join(p for p in partes_back if p).replace("\t", " ").replace("\n", "<br>").strip()
+                tags = " ".join(
+                    p.strip().replace(" ", "_")
+                    for p in f"{col['nombre']},{f.get('etiquetas', '')}".split(",")
+                    if p.strip()
+                )
+                filas_tsv.append(f"{frente}\t{reverso}\t{tags}")
+            return ("\n".join(filas_tsv) + "\n") if filas_tsv else ""
+        raise ValueError("Formato no soportado; usa 'json', 'md' o 'anki'")
 
     def importar_coleccion(
         self, datos: dict[str, Any] | str, formato: str = "json", nombre_coleccion: str = "",
@@ -745,6 +798,224 @@ class AgenteTutor:
                 "minutos_por_dia": self.config.minutos_por_dia,
                 "max_pendientes": self.config.max_pendientes,
                 "nuevas_por_dia": self.config.nuevas_por_dia,
+                "meta_diaria": self.config.meta_diaria,
             },
             "progreso": self.progreso(),
         }
+
+    # ---- v3.0: git diff, pistas socráticas, simulacros, grafo, plan 7d, webhook ----
+    def estudiar_diff(
+        self, diff_texto: str, titulo: str = "", coleccion: str = "Cambios Git (Diff)", max_fichas: int = 5,
+    ) -> dict[str, Any]:
+        limpio = diff_texto.strip()
+        if len(limpio) < 15:
+            raise ValueError("El git diff debe tener al menos 15 caracteres")
+        if len(limpio) > 30000:
+            raise ValueError("El git diff supera el máximo de 30 000 caracteres")
+        fichas, fuente = self.cerebro.descomponer_diff(limpio, titulo=titulo, max_fichas=max_fichas)
+        return self._guardar_fichas_ingesta(fichas, fuente, coleccion or "Cambios Git (Diff)", "git diff")
+
+    def pedir_pista(self, pregunta_id: int) -> dict[str, Any]:
+        with self._lock:
+            p = self.memoria.obtener_pregunta(pregunta_id)
+            if p is None:
+                raise LookupError("No existe esa pregunta")
+            if p["estado"] != "pendiente":
+                raise ValueError("La pregunta ya fue respondida")
+            nivel = self.memoria.incrementar_pistas(pregunta_id)
+            pista = generar_pista_progresiva(p, nivel)
+            self.memoria.anotar("decision", f"Entregué pista nivel {nivel}/3 para «{p['tema']}».")
+            return {
+                "pregunta_id": pregunta_id,
+                "nivel": nivel,
+                "pistas_usadas": nivel,
+                "pistas_restantes": max(0, 3 - nivel),
+                "pista": pista,
+            }
+
+    def iniciar_simulacro(
+        self, titulo: str = "Simulacro de estudio", cantidad: int = 5,
+        coleccion_id: Optional[int] = None, categoria_devcards: str = "", solo_brechas: bool = False,
+    ) -> dict[str, Any]:
+        n = max(1, min(int(cantidad), 20))
+        with self._lock:
+            if coleccion_id is not None and self.memoria.obtener_coleccion(coleccion_id) is None:
+                raise LookupError("No existe esa colección")
+            if categoria_devcards and not self.banco.existe_categoria(categoria_devcards):
+                raise LookupError(f"No existe el mazo «{categoria_devcards}»")
+
+            pendientes_actuales = {int(p["tema_id"]) for p in self.memoria.pendientes()}
+            temas_todos = self.memoria.listar_temas()
+            candidatos: list[dict[str, Any]] = []
+
+            if solo_brechas:
+                candidatos = [t for t in temas_todos if (t.get("en_refuerzo") or int(t.get("fallos") or 0) > 0) and int(t["id"]) not in pendientes_actuales]
+                filtro_txt = "solo_brechas"
+            elif coleccion_id is not None:
+                candidatos = [t for t in temas_todos if t.get("coleccion_id") == coleccion_id and int(t["id"]) not in pendientes_actuales]
+                filtro_txt = f"coleccion:{coleccion_id}"
+            elif categoria_devcards:
+                candidatos = [t for t in temas_todos if t.get("categoria") == categoria_devcards and int(t["id"]) not in pendientes_actuales]
+                # Si faltan tarjetas en memoria de esa categoría, introduce nuevas desde el banco sin pasar el límite n.
+                introducidas = self.memoria.refs_introducidas()
+                while len(candidatos) < n:
+                    tarjeta = self.banco.siguiente([categoria_devcards], introducidas)
+                    if tarjeta is None:
+                        break
+                    introducidas.add(str(tarjeta["id"]))
+                    nuevo_t = self.memoria.crear_tema(
+                        str(tarjeta["title"]), BancoDevCards.notas_de(tarjeta), origen="devcards",
+                        categoria=str(tarjeta.get("category", "")), ref_externa=str(tarjeta["id"]),
+                    )
+                    candidatos.append(nuevo_t)
+                filtro_txt = f"mazo:{categoria_devcards}"
+            else:
+                candidatos = [t for t in temas_todos if int(t["id"]) not in pendientes_actuales]
+                filtro_txt = "general"
+
+            candidatos = sorted(candidatos, key=lambda x: (float(x["facilidad"]), -int(x["fallos"])))[:n]
+            if not candidatos:
+                raise ValueError("No hay temas disponibles para crear el simulacro con ese filtro")
+
+            sesion = self.memoria.crear_sesion_examen(titulo, filtro_txt, len(candidatos))
+            preguntas_creadas: list[dict[str, Any]] = []
+            motivo = f"Simulacro «{sesion['titulo']}» (#{sesion['id']})."
+
+            for tema in candidatos:
+                tarjeta = self.banco.por_id.get(str(tema.get("ref_externa"))) if tema.get("origen") == "devcards" else None
+                if tarjeta is not None:
+                    vista_antes = int(tema["aciertos"]) + int(tema["fallos"])
+                    datos = BancoDevCards.pregunta_de(tarjeta, vista_antes)
+                    p = self.memoria.crear_pregunta(
+                        int(tema["id"]), datos["texto"], datos["respuesta_esperada"], motivo, "devcards",
+                        opciones=datos["opciones"], explicacion=datos["explicacion"],
+                        requiere_lectura=False, sesion_examen_id=int(sesion["id"]),
+                    )
+                else:
+                    vista_antes = int(tema["aciertos"]) + int(tema["fallos"])
+                    fallos_prev = self.memoria.fallos_recientes(int(tema["id"]))
+                    if tema.get("tipo") == "codigo" or tema.get("codigo"):
+                        preg = self.cerebro.generar_pregunta_codigo(tema, fallos_prev, vista_antes)
+                    else:
+                        preg = self.cerebro.generar_pregunta(str(tema["nombre"]), str(tema["notas"]), fallos_prev)
+                    p = self.memoria.crear_pregunta(
+                        int(tema["id"]), preg.texto, preg.respuesta_esperada, motivo, preg.fuente,
+                        explicacion=str(tema.get("idea_clave") or ""),
+                        requiere_lectura=False, sesion_examen_id=int(sesion["id"]),
+                    )
+                preguntas_creadas.append({
+                    "id": p["id"],
+                    "tema_id": p["tema_id"],
+                    "tema": p.get("tema"),
+                    "texto": p["texto"],
+                    "opciones": p.get("opciones"),
+                    "fuente": p["fuente"],
+                    "sesion_examen_id": sesion["id"],
+                })
+
+            self.memoria.anotar("sistema", f"Inicié simulacro «{sesion['titulo']}» con {len(preguntas_creadas)} pregunta(s).")
+            return {"sesion": self.obtener_simulacro(int(sesion["id"])), "preguntas": preguntas_creadas}
+
+    @staticmethod
+    def _enriquecer_simulacro(s: dict[str, Any]) -> dict[str, Any]:
+        resp = int(s.get("respondidas") or 0)
+        corr = int(s.get("correctas") or 0)
+        pct = round(100 * corr / resp, 1) if resp else None
+        duracion_s = None
+        if s.get("creada") and s.get("completada_en"):
+            duracion_s = round((s["completada_en"] - s["creada"]).total_seconds(), 1)
+        return {**s, "porcentaje_aciertos": pct, "duracion_s": duracion_s}
+
+    def ver_simulacros(self, limite: int = 10) -> list[dict[str, Any]]:
+        return [self._enriquecer_simulacro(s) for s in self.memoria.listar_sesiones_examen(max(1, min(limite, 50)))]
+
+    def obtener_simulacro(self, sesion_id: int) -> dict[str, Any]:
+        s = self.memoria.obtener_sesion_examen(sesion_id)
+        if s is None:
+            raise LookupError("No existe ese simulacro")
+        return self._enriquecer_simulacro(s)
+
+    def vincular_temas(self, origen_id: int, destino_id: int, tipo: str = "prerrequisito") -> dict[str, Any]:
+        with self._lock:
+            rel = self.memoria.crear_relacion(origen_id, destino_id, tipo=tipo)
+            self.memoria.anotar("sistema", f"Vinculé tema {origen_id} -> {destino_id} ({rel['tipo']}).")
+            return rel
+
+    def listar_relaciones(self, tema_id: Optional[int] = None) -> list[dict[str, Any]]:
+        return self.memoria.listar_relaciones(tema_id=tema_id)
+
+    def borrar_relacion(self, relacion_id: int) -> bool:
+        with self._lock:
+            return self.memoria.borrar_relacion(relacion_id)
+
+    def plan_estudio_hoy(self) -> dict[str, Any]:
+        t = ahora()
+        hoy_date = t.date()
+        hoy_act = self.memoria.actividad_de_hoy(t)
+        meta = self.config.meta_diaria
+        resp_hoy = hoy_act["respuestas"]
+        pct_meta = min(100, round(100 * resp_hoy / max(1, meta)))
+        pendientes = self.memoria.pendientes()
+        temas = self.memoria.listar_temas()
+        vencidos_ahora = sum(1 for x in temas if x["proximo_repaso"] <= t)
+        carga_hoy = max(len(pendientes), vencidos_ahora)
+        minutos_est = max(0, carga_hoy * 2)
+
+        pronostico = []
+        for offset in range(7):
+            dia = hoy_date + timedelta(days=offset)
+            if offset == 0:
+                cnt = sum(1 for x in temas if x["proximo_repaso"].date() <= dia)
+            else:
+                cnt = sum(1 for x in temas if x["proximo_repaso"].date() == dia)
+            pronostico.append({"fecha": dia.isoformat(), "vencen": cnt})
+
+        racha = self.memoria.calcular_racha_dias(t)
+        cols = self.memoria.listar_colecciones()
+        falta_meta = max(0, meta - resp_hoy)
+        if falta_meta == 0:
+            rec = f"¡Meta diaria completada ({resp_hoy}/{meta})! Racha de {racha} día(s)."
+        else:
+            rec = f"Te faltan {falta_meta} repaso(s) hoy para cumplir tu meta de {meta} (~{minutos_est} min estimados)."
+        return {
+            "fecha": hoy_date.isoformat(),
+            "meta_diaria": meta,
+            "respondidas_hoy": resp_hoy,
+            "aciertos_hoy": hoy_act["aciertos"],
+            "progreso_meta_pct": pct_meta,
+            "pendientes_ahora": len(pendientes),
+            "vencidos_ahora": vencidos_ahora,
+            "minutos_estimados": minutos_est,
+            "racha_dias": racha,
+            "pronostico_7_dias": pronostico,
+            "colecciones_activas": sum(1 for c in cols if c.get("activa")),
+            "recomendacion": rec,
+        }
+
+    def _notificar_si_corresponde(self, pendientes_count: int, vencidos_count: int) -> bool:
+        url = self.config.webhook_url.strip()
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return False
+        if pendientes_count == 0 and vencidos_count == 0:
+            return False
+        hoy_str = ahora().strftime("%Y-%m-%d")
+        lat = self.memoria.leer_latido()
+        if lat.get("ultima_notificacion") == hoy_str:
+            return False
+        payload = {
+            "evento": "recordatorio_diario",
+            "fecha": hoy_str,
+            "pendientes": pendientes_count,
+            "vencidos": vencidos_count,
+            "racha_dias": self.memoria.calcular_racha_dias(),
+            "recomendacion": self.plan_estudio_hoy()["recomendacion"],
+        }
+        try:
+            r = self.cerebro.cliente.post(url, json=payload, timeout=5.0)
+            r.raise_for_status()
+            self.memoria.registrar_notificacion(hoy_str)
+            self.memoria.anotar("sistema", f"Envié recordatorio diario por webhook ({pendientes_count} pendientes).")
+            return True
+        except Exception as exc:
+            log.warning("Webhook no disponible (%s); el ciclo continúa", type(exc).__name__)
+            return False

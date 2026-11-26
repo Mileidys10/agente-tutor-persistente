@@ -12,7 +12,7 @@
       <div class="cabecera-superior">
         <div class="identidad">
           <h1>Privacidad y uso de datos</h1>
-          <p class="texto-suave">Agente Tutor Persistente v2.0</p>
+          <p class="texto-suave">Agente Tutor Persistente v3.0</p>
         </div>
         <div class="cabecera-acciones">
           <a href="/" class="btn btn-secundario">Volver al tutor</a>
@@ -31,21 +31,21 @@
       <h2>1. Qué datos se guardan</h2>
       <p>La base de datos del agente (PostgreSQL en producción o SQLite en entorno local) guarda exclusivamente:</p>
       <ul>
-        <li>Tus colecciones personalizadas, temas propios, fragmentos de código ingresados y apuntes/Markdown.</li>
-        <li>Los mazos de DevCards que decides activar o pausar.</li>
-        <li>Las preguntas generadas, tus respuestas, la calificación (0–5), la retroalimentación y los parámetros SM-2.</li>
-        <li>Las métricas diarias de racha de estudio y la bitácora operativa de ciclos, decisiones y reflexiones del agente.</li>
+        <li>Tus colecciones personalizadas, temas propios, fragmentos de código, <code>git diff</code> y apuntes/Markdown.</li>
+        <li>Relaciones de prerrequisitos entre temas, sesiones de simulacro y mazos de DevCards activos o pausados.</li>
+        <li>Las preguntas generadas, pistas solicitadas, tus respuestas, la calificación (0–5) y parámetros SM-2.</li>
+        <li>Las métricas diarias de racha de estudio y la bitácora operativa de ciclos, decisiones y reflexiones.</li>
       </ul>
 
-      <h2>2. Cuándo se envían datos a Google Gemini</h2>
+      <h2>2. Cuándo se envían datos fuera del servidor</h2>
       <p>
-        Si quien administra el servidor configura una clave <code>GEMINI_API_KEY</code>, el título, notas,
-        código de estudio o respuestas abiertas se envían a Google Gemini únicamente para descomponer material,
-        generar preguntas y evaluar respuestas (delimitados para evitar inyección de instrucciones).
+        Si quien administra el servidor configura <code>GEMINI_API_KEY</code>, el título, notas, código,
+        <code>git diff</code> o respuestas abiertas se envían a Google Gemini únicamente para generar fichas,
+        preguntas y evaluaciones (delimitados contra inyección de instrucciones). Sin clave, todo opera al 100% en local.
       </p>
       <p>
-        Sin clave configurada, todo el análisis de código, segmentación Markdown, generación de preguntas y
-        evaluación funciona al 100% en local mediante el motor determinista del agente y el banco de 1 295 DevCards.
+        Si quien administra el servidor configura <code>TUTOR_WEBHOOK_URL</code> en el entorno, el agente envía
+        como máximo un resumen numérico diario (sin respuestas ni secretos) cuando existan repasos pendientes.
       </p>
 
       <h2>3. Cuentas, cookies y almacenamiento en el navegador</h2>
@@ -59,8 +59,9 @@
 
       <h2>4. Portabilidad y derecho al olvido</h2>
       <p>
-        Puedes exportar cualquier colección completa en formato <strong>JSON</strong> o <strong>Markdown</strong>
-        en cualquier momento desde la sección «Colecciones» (o <code>GET /api/colecciones/{id}/exportar</code>).
+        Puedes exportar cualquier colección completa en formato <strong>JSON</strong>, <strong>Markdown</strong>
+        o <strong>Anki TSV</strong> (<code>.tsv</code>) en cualquier momento desde «Colecciones»
+        (o <code>GET /api/colecciones/{id}/exportar</code>).
       </p>
       <p>
         Puedes borrar cualquier tema individual desde <strong>«Mis temas y código»</strong> (<code>DELETE /api/temas/{id}</code>)
@@ -72,7 +73,7 @@
 
   <footer class="pie">
     <div class="contenedor pie-interior">
-      <p>Agente Tutor Persistente v2.0</p>
+      <p>Agente Tutor Persistente v3.0</p>
       <p class="pie-enlaces">
         <a href="/">Volver a la aplicación</a>
       </p>

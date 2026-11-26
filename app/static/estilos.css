@@ -686,6 +686,7 @@ h3 {
 input[type="text"],
 input[type="search"],
 input[type="password"],
+input[type="number"],
 select,
 textarea {
   width: 100%;
@@ -769,6 +770,62 @@ textarea {
   border-radius: 8px;
   background: var(--surface-alt);
   border: 1px solid var(--border);
+}
+
+.caja-pista {
+  margin: 0.65rem 0;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.plan-caja {
+  margin-bottom: 1rem;
+  padding: 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+}
+
+.barra-meta {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  margin: 0.55rem 0 0.75rem;
+}
+
+.barra-meta-relleno {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.pronostico-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.check-inline input {
+  width: 18px;
+  height: 18px;
 }
 
 textarea {

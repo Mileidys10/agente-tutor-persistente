@@ -293,3 +293,131 @@ def descomponer_material_local(
             )
         )
     return fichas
+
+
+_EXT_LENGUAJE = {
+    ".py": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".sql": "sql",
+    ".java": "java",
+    ".go": "go",
+    ".rs": "rust",
+    ".html": "html",
+    ".css": "css",
+    ".sh": "bash",
+    ".ps1": "bash",
+}
+
+
+def _lenguaje_por_ruta(ruta: str, codigo: str) -> str:
+    for ext, lang in _EXT_LENGUAJE.items():
+        if ruta.lower().endswith(ext):
+            return lang
+    return detectar_lenguaje(codigo)
+
+
+def parsear_git_diff_local(
+    diff_texto: str, titulo: str = "", max_fichas: int = 5,
+) -> list[FichaExtraida]:
+    """Convierte un git diff unificado en fichas atómicas por archivo modificado."""
+    texto = diff_texto.strip()
+    if not texto:
+        return []
+    limite = max(1, min(int(max_fichas), 10))
+
+    secciones = re.split(r"(?m)^diff --git\s+", texto)
+    bloques_archivo: list[tuple[str, str]] = []
+    if len(secciones) > 1:
+        for sec in secciones[1:]:
+            lineas = sec.splitlines()
+            cab = lineas[0] if lineas else ""
+            m_ruta = re.search(r"b/([^\s]+)", cab)
+            ruta = m_ruta.group(1) if m_ruta else cab.split(" ")[-1]
+            cuerpo = "\n".join(lineas[1:]).strip()
+            if cuerpo:
+                bloques_archivo.append((ruta, cuerpo))
+    else:
+        # Soporta diffs parciales con cabecera +++ b/ruta o sin diff --git
+        m_plus = re.search(r"(?m)^\+\+\+\s+(?:b/)?([^\s]+)", texto)
+        ruta = m_plus.group(1) if m_plus and m_plus.group(1) != "/dev/null" else (titulo.strip() or "cambio.diff")
+        bloques_archivo.append((ruta, texto))
+
+    prefijo = f"{titulo.strip()}: " if titulo.strip() else "Diff: "
+    fichas: list[FichaExtraida] = []
+    for ruta, cuerpo in bloques_archivo[:limite]:
+        agregadas = [
+            l[1:] for l in cuerpo.splitlines()
+            if l.startswith("+") and not l.startswith("+++")
+        ]
+        eliminadas = [
+            l[1:] for l in cuerpo.splitlines()
+            if l.startswith("-") and not l.startswith("---")
+        ]
+        muestra_codigo = "\n".join(agregadas[:40]).strip() or cuerpo[:3000]
+        lang = _lenguaje_por_ruta(ruta, muestra_codigo)
+        resumen = (
+            f"Archivo «{ruta}» ({lang}): +{len(agregadas)} línea(s) añadida(s), "
+            f"-{len(eliminadas)} eliminada(s)."
+        )
+        notas_extra = ""
+        if agregadas:
+            ejemplo_linea = next((x.strip() for x in agregadas if x.strip()), "")
+            if ejemplo_linea:
+                notas_extra = f" Cambio principal incluye: `{ejemplo_linea[:140]}`."
+        fichas.append(
+            FichaExtraida(
+                nombre=f"{prefijo}{ruta}"[:200],
+                notas=f"{resumen}{notas_extra}"[:8000],
+                tipo="codigo",
+                codigo=muestra_codigo[:12000],
+                lenguaje=lang[:40],
+                analogia=f"Este diff funciona como una cirugía puntual sobre «{ruta}»: cambia solo lo necesario manteniendo el resto intacto.",
+                idea_clave=resumen[:1000],
+                etiquetas=f"{lang},diff,codigo",
+            )
+        )
+    return fichas
+
+
+def generar_pista_progresiva(pregunta: dict[str, Any], nivel: int) -> str:
+    """Genera una pista gradual (1..3) sin revelar la respuesta esperada literal."""
+    nivel_clamped = max(1, min(int(nivel), 3))
+    esperada = str(pregunta.get("respuesta_esperada") or "").strip()
+    explicacion = str(pregunta.get("explicacion") or pregunta.get("idea_clave") or "").strip()
+    analogia = str(pregunta.get("analogia") or "").strip()
+    categoria = str(pregunta.get("lenguaje") or pregunta.get("categoria") or pregunta.get("tipo") or "estudio").strip()
+    opciones = pregunta.get("opciones")
+
+    if nivel_clamped == 1:
+        if analogia:
+            return f"Pista 1/3 (enfoque): {analogia[:240]}"
+        if opciones:
+            return f"Pista 1/3: Hay {len(opciones)} opciones; descarta primero las que contradicen el concepto clave de {categoria}."
+        return f"Pista 1/3 (enfoque): Piensa en el propósito central de «{pregunta.get('tema', 'este tema')}» en {categoria}."
+
+    if nivel_clamped == 2:
+        if explicacion:
+            return f"Pista 2/3 (idea clave): {explicacion[:260]}"
+        palabras = [p for p in re.findall(r"\w+", esperada) if len(p) > 3]
+        if palabras:
+            return f"Pista 2/3: Tu respuesta debería conectar aproximadamente {len(palabras)} concepto(s) clave."
+        return "Pista 2/3: Revisa el efecto directo o valor que devuelve la regla/operación preguntada."
+
+    # Nivel 3: esqueleto enmascarado sin entregar la respuesta literal
+    if opciones and esperada in opciones:
+        letras = "ABCDEFGH"
+        idx = opciones.index(esperada)
+        letra = letras[idx] if idx < len(letras) else "?"
+        mitad = max(0, (idx + 1) // 2)
+        return f"Pista 3/3 (casi listo): La opción correcta está en la zona {'alta (A-D)' if idx < 4 else 'baja (E-H)'}; empieza por «{esperada[:2]}…» (descarta las primeras {mitad})." if mitad else f"Pista 3/3: Empieza por «{esperada[:3]}…» (letra cercana a {letra if False else 'inicio'})."
+
+    tokens = [t for t in re.findall(r"[a-zA-Z0-9áéíóúñÁÉÍÓÚÑ_]+", esperada)]
+    if not tokens:
+        return "Pista 3/3: Responde con una definición breve y precisa del concepto central."
+    primera = tokens[0]
+    mascara = primera[0] + ("*" * max(1, min(len(primera) - 1, 6)))
+    return f"Pista 3/3 (estructura): Empieza por «{mascara}» ({len(primera)} letras) · total ~{len(tokens)} palabra(s)."
+
