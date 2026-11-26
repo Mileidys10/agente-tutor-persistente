@@ -295,6 +295,67 @@ def test_migracion_agrega_columnas_a_una_base_v1_sin_perder_datos(tmp_path: Path
     m = Memoria(url)  # al abrirla, migra
     columnas = {c["name"] for c in sa.inspect(m.engine).get_columns("preguntas")}
     assert {"requiere_lectura", "leida_en"} <= columnas
+    cols_temas = {c["name"] for c in sa.inspect(m.engine).get_columns("temas")}
+    assert {"tipo", "coleccion_id", "codigo", "lenguaje", "analogia", "idea_clave", "etiquetas", "en_refuerzo"} <= cols_temas
+    tablas = set(sa.inspect(m.engine).get_table_names())
+    assert {"colecciones", "actividad_diaria"} <= tablas
     vieja = m.pendientes()[0]
     assert vieja["texto"] == "¿Pregunta vieja?" and vieja["requiere_lectura"] is False
     Memoria(url)  # una segunda apertura no vuelve a migrar ni falla
+
+
+def test_lectura_unificada_y_colecciones_pausadas(tmp_path: Path) -> None:
+    a = _agente(tmp_path, nuevas_por_dia=0, minutos_por_dia=1)
+    col_activa = a.crear_coleccion("Python Avanzado", "Decoradores y contexto")
+    col_pausa = a.crear_coleccion("Pausada", "No preguntar por ahora")
+    a.actualizar_coleccion(col_pausa["id"], activa=False)
+
+    t_codigo = a.agregar_tema(
+        "Decorador simple",
+        "Envuelve una función para extender su comportamiento sin modificarla.",
+        coleccion_id=col_activa["id"],
+        tipo="codigo",
+        codigo="def deco(f):\n    return f",
+        lenguaje="python",
+        analogia="Es como envolver un regalo.",
+        idea_clave="Recibe y devuelve una función.",
+    )
+    a.agregar_tema("Tema en pausa", "No debe salir en ciclo.", coleccion_id=col_pausa["id"])
+
+    res = a.ciclo()
+    assert len(res["preguntas_creadas"]) == 1
+    preg = a.memoria.pendientes()[0]
+    assert preg["tema_id"] == t_codigo["id"]
+    assert preg["requiere_lectura"] is True
+    lec = a.lectura_de(preg)
+    assert lec is not None and lec["codigo"] == "def deco(f):\n    return f"
+    assert lec["analogia"] == "Es como envolver un regalo." and lec["idea_clave"]
+
+    a.marcar_leida(preg["id"])
+    assert a.lectura_de(a.memoria.pendientes()[0]) is None
+    assert a.responder(preg["id"], "función")["nota"] >= 1
+
+
+def test_reflexion_brechas_y_racha_diaria(tmp_path: Path) -> None:
+    a = _agente(tmp_path, nuevas_por_dia=0, minutos_por_dia=1)
+    t = a.agregar_tema("Índices GIN", "Sirven para buscar dentro de JSONB y arreglos en PostgreSQL.")
+    # Simular 3 fallos acumulados con fecha vencida
+    a.memoria.actualizar_repaso(t["id"], 0, 1.0, 1.4, ahora() - timedelta(minutes=5), acierto=False, nota=1)
+    a.memoria.actualizar_repaso(t["id"], 0, 1.0, 1.4, ahora() - timedelta(minutes=5), acierto=False, nota=1)
+    a.memoria.actualizar_repaso(t["id"], 0, 1.0, 1.4, ahora() - timedelta(minutes=5), acierto=False, nota=1)
+
+    res = a.ciclo()
+    assert len(res["preguntas_creadas"]) == 1
+    assert a.memoria.obtener_tema(t["id"])["en_refuerzo"] is True
+    assert any(b["tipo"] == "reflexion" for b in a.memoria.leer_bitacora())
+    # En refuerzo vuelve a exigir lectura guiada antes de preguntar
+    preg = a.memoria.pendientes()[0]
+    assert preg["requiere_lectura"] is True
+    a.marcar_leida(preg["id"])
+    # Dos aciertos sólidos seguidos sacan al tema de modo refuerzo y registran racha
+    a.responder(preg["id"], preg["respuesta_esperada"])
+    assert a.progreso()["racha_dias"] >= 1
+    a.memoria.actualizar_repaso(t["id"], 1, 1.0, 1.6, ahora() - timedelta(seconds=1), acierto=True, nota=5)
+    assert a.memoria.obtener_tema(t["id"])["en_refuerzo"] is False
+    diag = a.diagnosticar_brechas()
+    assert diag["racha_dias"] >= 1 and diag["recomendacion"]

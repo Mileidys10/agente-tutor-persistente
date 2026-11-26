@@ -171,3 +171,51 @@ def test_cobertura_completa_nueve_herramientas_mcp(cliente) -> None:
     r_bit = c.post("/mcp", json=_rpc("tools/call", {"name": "ver_bitacora", "arguments": {"limite": 5}}, 18), headers=h)
     assert r_bit.status_code == 200
 
+
+def test_colecciones_busqueda_edicion_posponer_exportar_importar(cliente) -> None:
+    c, _ = cliente
+    assert c.post("/api/colecciones", json={"nombre": "Backend"}).status_code == 401
+    col = c.post("/api/colecciones", json={"nombre": "Backend", "descripcion": "APIs"}, headers=H)
+    assert col.status_code == 201
+    cid = col.json()["id"]
+    assert c.post("/api/colecciones", json={"nombre": "backend"}, headers=H).status_code == 409
+
+    t = c.post(
+        "/api/temas",
+        json={"nombre": "FastAPI Depends", "notas": "Inyección de dependencias.", "coleccion_id": cid, "etiquetas": "api,python"},
+        headers=H,
+    )
+    assert t.status_code == 201
+    tid = t.json()["id"]
+
+    # Buscar y editar
+    assert len(c.get("/api/temas?q=depends").json()) == 1
+    assert len(c.get(f"/api/temas?coleccion_id={cid}").json()) == 1
+    ed = c.patch(f"/api/temas/{tid}", json={"idea_clave": "Usa Depends() para desacoplar"}, headers=H)
+    assert ed.status_code == 200 and ed.json()["idea_clave"] == "Usa Depends() para desacoplar"
+
+    # Posponer
+    posp = c.post(f"/api/temas/{tid}/posponer", json={"dias": 2}, headers=H)
+    assert posp.status_code == 200
+
+    # Exportar JSON y Markdown
+    exp_json = c.get(f"/api/colecciones/{cid}/exportar?formato=json")
+    assert exp_json.status_code == 200 and len(exp_json.json()["fichas"]) == 1
+    exp_md = c.get(f"/api/colecciones/{cid}/exportar?formato=md")
+    assert exp_md.status_code == 200 and "## FastAPI Depends" in exp_md.text
+
+    # Importar Markdown en nueva colección
+    imp = c.post(
+        "/api/colecciones/importar",
+        json={"datos": exp_md.text, "formato": "md", "nombre_coleccion": "Backend Copia"},
+        headers=H,
+    )
+    assert imp.status_code == 201 and len(imp.json()["importados"]) == 1
+
+    # Pausar y borrar colección
+    assert c.patch(f"/api/colecciones/{cid}", json={"activa": False}, headers=H).json()["activa"] is False
+    assert c.delete(f"/api/colecciones/{cid}", headers=H).status_code == 200
+    assert c.get("/api/colecciones").status_code == 200
+    b = c.get("/api/brechas")
+    assert b.status_code == 200 and "recomendacion" in b.json() and "racha_dias" in b.json()
+

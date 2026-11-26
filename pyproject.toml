@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agente-tutor-persistente"
+version = "2.0.0"
+description = "Agente tutor de estudio persistente con memoria en PostgreSQL/SQLite, repetición espaciada SM-2, ingesta de código/Markdown y servidor MCP completo."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [{name = "Mileidys Agamez Ospino"}]
+dependencies = [
+    "fastapi==0.165.0",
+    "uvicorn[standard]==0.54.0",
+    "SQLAlchemy==2.1.9",
+    "psycopg[binary]==3.3.9",
+    "httpx==0.28.1",
+    "mcp==2.3.0",
+    "pydantic==2.14.4",
+]
+
+[project.scripts]
+agente-tutor-mcp = "app.mcp_tools:main_cli"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["data/*.json", "static/*"]

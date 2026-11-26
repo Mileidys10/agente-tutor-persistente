@@ -115,21 +115,17 @@ El archivo `render.yaml` define el Blueprint completo (`agente-tutor-persistente
 
 ---
 
-## Cómo conectar Claude Desktop o Claude Code por MCP
+## Cómo conectar Claude Desktop, Claude Code, Cursor o Antigravity por MCP (v2.0)
 
-El agente expone **9 herramientas MCP** sobre la misma base de datos que la interfaz web:
+El agente expone **19 herramientas MCP** (con las 4 banderas booleanas de `ToolAnnotations`), **6 Resources (`tutor://*`)** y **5 Prompts pedagógicos** sobre la misma base de datos que la interfaz web. Consulta la guía completa en [`docs/CONECTAR_MCP.md`](docs/CONECTAR_MCP.md).
 
-| Herramienta | Propósito |
+| Categoría | Capacidades MCP v2.0 |
 |---|---|
-| `agregar_tema` | Registra un tema propio (`nombre`, `notas`) para el próximo ciclo autónomo. |
-| `ver_preguntas_pendientes` | Lista las preguntas pendientes (incluyendo `requiere_lectura` y `lectura` si aplica) sin revelar la respuesta esperada. |
-| `marcar_tarjeta_leida` | Marca una tarjeta nueva como leída (`pregunta_id`) para habilitar su pregunta. |
-| `responder_pregunta` | Envía la respuesta de la persona (`pregunta_id`, `respuesta`) y recalcula SM-2. |
-| `ver_mazos` | Lista las 42 categorías de DevCards con conteo de tarjetas y estado activo. |
-| `activar_mazo` | Activa o pausa una categoría DevCards por su nombre exacto. |
-| `ver_progreso` | Devuelve temas, dominados, porcentaje de aciertos y temas más difíciles. |
-| `ver_estado` | Reporta `vivo`, `ciclos`, `arranques`, cerebro activo y configuración. |
-| `ver_bitacora` | Lee las últimas entradas registradas por el agente en `bitacora`. |
+| **Tools — Estudio e Ingesta** | `estudiar_codigo`, `ingestar_material`, `agregar_tema`, `ver_preguntas_pendientes`, `marcar_tarjeta_leida`, `responder_pregunta` |
+| **Tools — Colecciones y Gestión** | `gestionar_coleccion`, `buscar_temas`, `editar_tema`, `borrar_tema`, `posponer_tema`, `exportar_mazo`, `importar_mazo` |
+| **Tools — DevCards y Diagnóstico** | `ver_mazos`, `activar_mazo`, `ver_progreso`, `diagnosticar_brechas`, `ver_estado`, `ver_bitacora` |
+| **Resources (`tutor://*`)** | `tutor://estado`, `tutor://pendientes`, `tutor://colecciones`, `tutor://tema/{tema_id}`, `tutor://brechas`, `tutor://bitacora/reciente` |
+| **Prompts (`@mcp.prompt`)** | `sesion_repaso`, `aprender_codigo_generado`, `ingestar_apuntes`, `tutor_socratico`, `resumen_semanal` |
 
 ### Conexión remota a Render (Streamable HTTP)
 
@@ -184,13 +180,15 @@ Para clientes locales como **Claude Desktop**, añade una entrada en `claude_des
 
 ---
 
-## Contrato API y privacidad
+## Contrato API, Especificación v2.0 y privacidad
 
-- Cómo funciona el programa por dentro (recorrido, conexiones y preguntas frecuentes): [`docs/COMO_FUNCIONA.md`](docs/COMO_FUNCIONA.md)
+- Especificación de producto v2.0 («Aprende lo que Construyes»): [`docs/PRD_V2.md`](docs/PRD_V2.md)
+- Casos de uso v1.1 y v2.0 (`CU-01` a `CU-16`): [`docs/CASOS_DE_USO.md`](docs/CASOS_DE_USO.md) y [`docs/CASOS_DE_USO_V2.md`](docs/CASOS_DE_USO_V2.md)
+- Guía de conexión MCP (`stdio` y remoto): [`docs/CONECTAR_MCP.md`](docs/CONECTAR_MCP.md)
+- Cómo funciona el programa por dentro: [`docs/COMO_FUNCIONA.md`](docs/COMO_FUNCIONA.md)
 - Especificación técnica de endpoints: [`docs/CONTRATO_API.md`](docs/CONTRATO_API.md)
-- Casos de uso y diagramas: [`docs/CASOS_DE_USO.md`](docs/CASOS_DE_USO.md)
 - Guion de exposición en clase: [`docs/GUION_EXPOSICION.md`](docs/GUION_EXPOSICION.md)
-- Política de privacidad servida por la app: [`app/static/privacidad.html`](app/static/privacidad.html) (`/privacidad`)
+- Política de privacidad y portabilidad: [`app/static/privacidad.html`](app/static/privacidad.html) (`/privacidad`)
 
 ---
 

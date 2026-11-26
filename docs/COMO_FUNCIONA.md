@@ -98,10 +98,11 @@ flowchart LR
 | `app/sm2.py` | Función pura del algoritmo SuperMemo 2 (`EstadoSM2`, `actualizar`) que calcula nuevo intervalo y facilidad según nota `0–5`. |
 | `app/memoria.py` | Tablas SQLAlchemy (`temas`, `preguntas`, `respuestas`, `mazos`, `bitacora`, `latido`), migración segura (`_migrar`) y operaciones con PostgreSQL/SQLite. |
 | `app/cerebro.py` | Motor cognitivo (`Cerebro`): llama a Gemini API si hay clave y usa reglas locales deterministas como respaldo en temas abiertos. |
+| `app/ingesta.py` | Analizador determinista local para descomponer código y apuntes/Markdown sin requerir clave Gemini. |
 | `app/banco_devcards.py` | Carga `app/data/devcards.json` (`1 295` tarjetas), lista las `42` categorías y elige la siguiente tarjeta nueva según dificultad (`siguiente`). |
 | `app/data/devcards.json` | Banco de conocimiento estático de solo lectura con 1 295 DevCards (licencia MIT). |
-| `app/agente.py` | Clase `AgenteTutor`: ciclo autónomo `percibir -> decidir -> actuar`, manejo de lectura previa, evaluación y métricas de estado/progreso. |
-| `app/mcp_tools.py` | Servidor MCP con 9 herramientas conectadas a `AgenteTutor` (para `/mcp` remoto o `python -m app.mcp_tools` en local). |
+| `app/agente.py` | Clase `AgenteTutor`: ciclo autónomo `percibir -> reflexionar -> decidir -> actuar`, manejo de lectura previa, brechas, rachas y SM-2. |
+| `app/mcp_tools.py` | Servidor MCP v2.0 completo: 19 Tools anotadas, 6 Resources (`tutor://*`) y 5 Prompts (`/mcp` remoto o `agente-tutor-mcp` en local). |
 | `app/main.py` | Servidor FastAPI: rutas REST, seguridad con `TUTOR_TOKEN`, páginas web, `lifespan` del agente y montaje de `/mcp`. |
 | `app/static/index.html` | Estructura semántica HTML de una sola página con las secciones Estudiar, Progreso, Mis temas, Mazos, Bitácora y diálogo de clave. |
 | `app/static/estilos.css` | Estilos editoriales claros (WCAG 2.1 AA), botones mínimos de `44 px`, diseño móvil desde `360 px` y código con scroll horizontal propio. |

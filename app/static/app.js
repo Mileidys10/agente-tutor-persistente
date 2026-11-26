@@ -10,7 +10,10 @@
 
   let tokenEnMemoria = "";
   let mazosCache = [];
+  let temasCache = [];
+  let coleccionesCache = [];
   let confirmandoBorradoId = null;
+  let editandoTemaId = null;
   let accionPendiente = null;
   let temporizadorAviso = null;
   let recargaEnCurso = false;
@@ -116,6 +119,8 @@
       case "decision":
         return "pildora pildora-azul";
       case "pregunta":
+        return "pildora pildora-aviso";
+      case "reflexion":
         return "pildora pildora-aviso";
       case "error":
         return "pildora pildora-error";
@@ -612,9 +617,9 @@
     }
   }
 
-  // ---- Renderizado: Progreso e historial ------------------------------------
-  // Actualiza los contadores de avance, la lista de temas con más fallos y las últimas evaluaciones.
-  function renderizarProgreso(prog, historial) {
+  // ---- Renderizado: Progreso, brechas e historial --------------------------
+  // Actualiza los contadores de avance, racha, brechas en refuerzo y últimas evaluaciones.
+  function renderizarProgreso(prog, historial, brechas) {
     el("prog-temas").textContent = String(prog.temas ?? 0);
     el("prog-dominados").textContent = String(prog.dominados ?? 0);
     el("prog-respuestas").textContent = String(prog.respuestas ?? 0);
@@ -622,6 +627,29 @@
       prog.porcentaje_aciertos !== null && prog.porcentaje_aciertos !== undefined
         ? `${prog.porcentaje_aciertos}%`
         : "—";
+    if (el("prog-racha")) {
+      el("prog-racha").textContent = `${Number(prog.racha_dias ?? 0)} d`;
+    }
+
+    const recEl = el("brechas-recomendacion");
+    const listaBrechas = el("lista-brechas");
+    if (recEl && listaBrechas && brechas) {
+      recEl.textContent = brechas.recomendacion || "";
+      const refItems = Array.isArray(brechas.en_refuerzo) ? brechas.en_refuerzo : [];
+      if (refItems.length === 0) {
+        listaBrechas.replaceChildren(crear("li", "texto-suave", "Sin temas en refuerzo guiado."));
+      } else {
+        const nodos = refItems.map((b) => {
+          const li = crear("li", "item-compacto");
+          li.appendChild(crear("strong", "", b.nombre));
+          li.appendChild(
+            crear("span", "pildora pildora-aviso", `${b.fallos} fallo(s) · fac. ${Number(b.facilidad).toFixed(2)}`)
+          );
+          return li;
+        });
+        listaBrechas.replaceChildren(...nodos);
+      }
+    }
 
     const listaDificiles = el("lista-dificiles");
     const dificiles = Array.isArray(prog.mas_dificiles) ? prog.mas_dificiles : [];
@@ -677,39 +705,141 @@
     }
   }
 
-  // Muestra cada tema guardado con su próxima fecha SM-2 y confirmación en dos pasos para evitar borrados por error.
+  async function posponerTema(t) {
+    try {
+      await peticion(
+        `/api/temas/${t.id}/posponer`,
+        { method: "POST", body: JSON.stringify({ dias: 1 }) },
+        () => posponerTema(t)
+      );
+      mostrarAvisoGlobal(`Tema «${t.nombre}» pospuesto 1 día de estudio.`);
+      await cargarTodo(true);
+    } catch (err) {
+      if (err.status !== 401) {
+        mostrarAvisoGlobal(err.message || "No se pudo posponer el tema.", true);
+      }
+    }
+  }
+
+  async function guardarEdicionTema(t, nombre, notas, ideaClave) {
+    try {
+      await peticion(
+        `/api/temas/${t.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ nombre, notas, idea_clave: ideaClave }),
+        },
+        () => guardarEdicionTema(t, nombre, notas, ideaClave)
+      );
+      editandoTemaId = null;
+      mostrarAvisoGlobal(`Tema «${nombre}» actualizado.`);
+      await cargarTodo(true);
+    } catch (err) {
+      if (err.status !== 401) {
+        mostrarAvisoGlobal(err.message || "No se pudo editar el tema.", true);
+      }
+    }
+  }
+
+  // Muestra cada tema guardado con filtro, edición inline, posposición y confirmación de borrado.
   function renderizarTemas(temas, forzar = false) {
+    temasCache = temas;
     el("badge-temas").textContent = `${temas.length} ${temas.length === 1 ? "tema" : "temas"}`;
     const cont = el("lista-temas");
-    if (!forzar && (contieneFoco(cont) || confirmandoBorradoId !== null)) {
+    if (!forzar && (contieneFoco(cont) || confirmandoBorradoId !== null || editandoTemaId !== null)) {
       return;
     }
 
-    if (temas.length === 0) {
+    const q = (el("filtro-temas") ? el("filtro-temas").value : "").trim().toLowerCase();
+    const tipoFiltro = el("filtro-temas-tipo") ? el("filtro-temas-tipo").value : "";
+    const filtrados = temas.filter((t) => {
+      if (tipoFiltro && (t.tipo || (t.origen === "devcards" ? "devcard" : "nota")) !== tipoFiltro) {
+        return false;
+      }
+      if (!q) return true;
+      const texto = `${t.nombre || ""} ${t.notas || ""} ${t.lenguaje || ""} ${t.etiquetas || ""} ${t.categoria || ""}`.toLowerCase();
+      return texto.includes(q);
+    });
+
+    if (filtrados.length === 0) {
       cont.replaceChildren(
-        crear("p", "estado-vacio", "Todavía no hay temas en memoria. Agrega uno en el formulario de arriba.")
+        crear("p", "estado-vacio", temas.length === 0 ? "Todavía no hay temas en memoria. Agrega uno arriba." : "Ningún tema coincide con el filtro.")
       );
       return;
     }
 
     const ahoraMs = Date.now();
-    const nodos = temas.map((t) => {
+    const nodos = filtrados.map((t) => {
       const art = crear("article", "tarjeta-tema");
       const filaSup = crear("div", "tema-fila-superior");
       filaSup.appendChild(crear("span", "tema-nombre", t.nombre));
 
-      const etiquetaOrigen =
-        t.origen === "devcards"
-          ? `DevCards${t.categoria ? " · " + t.categoria : ""}`
-          : "Propio";
-      filaSup.appendChild(
-        crear("span", `pildora ${t.origen === "devcards" ? "pildora-ok" : "pildora-azul"}`, etiquetaOrigen)
-      );
+      const pildoras = crear("div", "resultado-meta");
+      let etiquetaOrigen = "Propio";
+      let claseOrigen = "pildora-azul";
+      if (t.origen === "devcards") {
+        etiquetaOrigen = `DevCards${t.categoria ? " · " + t.categoria : ""}`;
+        claseOrigen = "pildora-ok";
+      } else if (t.tipo === "codigo") {
+        etiquetaOrigen = `Código${t.lenguaje ? " · " + t.lenguaje : ""}`;
+      } else if (t.tipo === "material") {
+        etiquetaOrigen = "Apuntes";
+      }
+      pildoras.appendChild(crear("span", `pildora ${claseOrigen}`, etiquetaOrigen));
+      if (t.en_refuerzo) {
+        pildoras.appendChild(crear("span", "pildora pildora-aviso", "En refuerzo"));
+      }
+      filaSup.appendChild(pildoras);
       art.appendChild(filaSup);
 
       if (t.notas) {
         const resumen = t.notas.length > 220 ? `${t.notas.slice(0, 220)}…` : t.notas;
         art.appendChild(crear("p", "tema-notas", resumen));
+      }
+
+      if (t.codigo) {
+        const pre = crear("pre", "lectura-codigo");
+        const muestra = t.codigo.length > 220 ? `${t.codigo.slice(0, 220)}…` : t.codigo;
+        pre.appendChild(crear("code", "", muestra));
+        art.appendChild(pre);
+      }
+
+      if (editandoTemaId === t.id) {
+        const formEd = crear("form", "form-edicion-inline");
+        const inNom = crear("input", "");
+        inNom.type = "text";
+        inNom.value = t.nombre || "";
+        inNom.required = true;
+        inNom.setAttribute("aria-label", "Nuevo nombre del tema");
+
+        const inNotas = crear("textarea", "");
+        inNotas.rows = 2;
+        inNotas.value = t.notas || "";
+        inNotas.setAttribute("aria-label", "Nuevas notas del tema");
+
+        const inIdea = crear("input", "");
+        inIdea.type = "text";
+        inIdea.value = t.idea_clave || "";
+        inIdea.placeholder = "Idea clave (opcional)";
+        inIdea.setAttribute("aria-label", "Idea clave");
+
+        const filaEd = crear("div", "tema-acciones");
+        const btnG = crear("button", "btn btn-primario", "Guardar");
+        btnG.type = "submit";
+        const btnC = crear("button", "btn btn-terciario", "Cancelar");
+        btnC.type = "button";
+        btnC.addEventListener("click", () => {
+          editandoTemaId = null;
+          renderizarTemas(temasCache, true);
+        });
+        filaEd.append(btnG, btnC);
+        formEd.append(inNom, inNotas, inIdea, filaEd);
+        formEd.addEventListener("submit", (ev) => {
+          ev.preventDefault();
+          guardarEdicionTema(t, inNom.value.trim(), inNotas.value, inIdea.value);
+        });
+        art.appendChild(formEd);
+        return art;
       }
 
       const meta = crear("div", "tema-meta");
@@ -738,23 +868,152 @@
         btnCancelar.type = "button";
         btnCancelar.addEventListener("click", () => {
           confirmandoBorradoId = null;
-          renderizarTemas(temas, true);
+          renderizarTemas(temasCache, true);
         });
         acciones.append(btnConfirmar, btnCancelar);
       } else {
+        const btnPosponer = crear("button", "btn btn-terciario", "Posponer 1d");
+        btnPosponer.type = "button";
+        btnPosponer.addEventListener("click", () => posponerTema(t));
+
+        const btnEditar = crear("button", "btn btn-terciario", "Editar");
+        btnEditar.type = "button";
+        btnEditar.addEventListener("click", () => {
+          editandoTemaId = t.id;
+          renderizarTemas(temasCache, true);
+        });
+
         const btnBorrar = crear("button", "btn btn-terciario", "Borrar");
         btnBorrar.type = "button";
         btnBorrar.setAttribute("aria-label", `Borrar tema ${t.nombre}`);
         btnBorrar.addEventListener("click", () => {
           confirmandoBorradoId = t.id;
-          renderizarTemas(temas, true);
+          renderizarTemas(temasCache, true);
         });
-        acciones.appendChild(btnBorrar);
+        acciones.append(btnPosponer, btnEditar, btnBorrar);
       }
       art.appendChild(acciones);
       return art;
     });
 
+    cont.replaceChildren(...nodos);
+  }
+
+  // ---- Renderizado: Colecciones personalizadas ------------------------------
+  async function alternarColeccion(col, btn) {
+    const nuevo = !col.activa;
+    btn.disabled = true;
+    try {
+      await peticion(
+        `/api/colecciones/${col.id}`,
+        { method: "PATCH", body: JSON.stringify({ activa: nuevo }) },
+        () => alternarColeccion(col, btn)
+      );
+      mostrarAvisoGlobal(`Colección «${col.nombre}» ${nuevo ? "activada" : "pausada"}.`);
+      await cargarTodo(true);
+    } catch (err) {
+      if (err.status !== 401) {
+        mostrarAvisoGlobal(err.message || "No se pudo actualizar la colección.", true);
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function exportarColeccionArchivo(col, formato) {
+    try {
+      const resp = await fetch(`/api/colecciones/${col.id}/exportar?formato=${formato}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const contenido = formato === "json" ? JSON.stringify(await resp.json(), null, 2) : await resp.text();
+      const blob = new Blob([contenido], { type: formato === "json" ? "application/json" : "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${col.nombre.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.${formato}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      mostrarAvisoGlobal(`Colección «${col.nombre}» exportada en ${formato.toUpperCase()}.`);
+    } catch (err) {
+      mostrarAvisoGlobal(err.message || "No se pudo exportar la colección.", true);
+    }
+  }
+
+  async function borrarColeccion(col) {
+    try {
+      await peticion(
+        `/api/colecciones/${col.id}`,
+        { method: "DELETE" },
+        () => borrarColeccion(col)
+      );
+      mostrarAvisoGlobal(`Colección «${col.nombre}» eliminada.`);
+      await cargarTodo(true);
+    } catch (err) {
+      if (err.status !== 401) {
+        mostrarAvisoGlobal(err.message || "No se pudo eliminar la colección.", true);
+      }
+    }
+  }
+
+  function renderizarColecciones(cols, forzar = false) {
+    coleccionesCache = cols;
+    const badge = el("badge-colecciones");
+    if (badge) {
+      badge.textContent = `${cols.length} ${cols.length === 1 ? "colección" : "colecciones"}`;
+    }
+    const sel = el("tema-coleccion");
+    if (sel && document.activeElement !== sel) {
+      const valorPrev = sel.value;
+      const opciones = [crear("option", "", "Sin colección")];
+      opciones[0].value = "";
+      for (const c of cols) {
+        const opt = crear("option", "", c.nombre);
+        opt.value = String(c.id);
+        opciones.push(opt);
+      }
+      sel.replaceChildren(...opciones);
+      sel.value = valorPrev;
+    }
+
+    const cont = el("lista-colecciones");
+    if (!cont || (!forzar && contieneFoco(cont))) return;
+    if (cols.length === 0) {
+      cont.replaceChildren(crear("p", "estado-vacio", "Sin colecciones creadas todavía."));
+      return;
+    }
+
+    const nodos = cols.map((c) => {
+      const fila = crear("div", "item-mazo");
+      const info = crear("div", "mazo-info");
+      info.appendChild(crear("div", "mazo-nombre", c.nombre));
+      const desc = c.descripcion ? `${c.descripcion} · ` : "";
+      info.appendChild(
+        crear("div", "mazo-cifras", `${desc}${c.temas} ficha(s) · ${c.dominados} dominada(s)`)
+      );
+
+      const acciones = crear("div", "tema-acciones");
+      const btnEst = crear("button", "btn-interruptor", c.activa ? "Activa" : "Pausada");
+      btnEst.type = "button";
+      btnEst.setAttribute("aria-pressed", c.activa ? "true" : "false");
+      btnEst.addEventListener("click", () => alternarColeccion(c, btnEst));
+
+      const btnJson = crear("button", "btn btn-terciario", "JSON");
+      btnJson.type = "button";
+      btnJson.addEventListener("click", () => exportarColeccionArchivo(c, "json"));
+
+      const btnMd = crear("button", "btn btn-terciario", "MD");
+      btnMd.type = "button";
+      btnMd.addEventListener("click", () => exportarColeccionArchivo(c, "md"));
+
+      const btnDel = crear("button", "btn btn-terciario", "Borrar");
+      btnDel.type = "button";
+      btnDel.addEventListener("click", () => borrarColeccion(c));
+
+      acciones.append(btnEst, btnJson, btnMd, btnDel);
+      fila.append(info, acciones);
+      return fila;
+    });
     cont.replaceChildren(...nodos);
   }
 
@@ -878,11 +1137,13 @@
     evento.preventDefault();
     const inputNombre = el("tema-nombre");
     const inputNotas = el("tema-notas");
+    const selectCol = el("tema-coleccion");
     const btn = el("btn-agregar-tema");
     const estadoInline = el("estado-form-tema");
 
     const nombre = inputNombre.value.trim();
     const notas = inputNotas.value.trim();
+    const coleccionId = selectCol && selectCol.value ? Number(selectCol.value) : null;
     if (nombre.length < 2) {
       estadoInline.textContent = "El nombre debe tener al menos 2 caracteres.";
       estadoInline.className = "estado-inline es-error";
@@ -899,7 +1160,7 @@
           "/api/temas",
           {
             method: "POST",
-            body: JSON.stringify({ nombre, notas }),
+            body: JSON.stringify({ nombre, notas, coleccion_id: coleccionId }),
           },
           enviar
         );
@@ -924,17 +1185,191 @@
     await enviar();
   }
 
-  // Consulta en paralelo los 7 endpoints de lectura para mantener sincronizada toda la página cada 5 segundos.
+  async function manejarEstudiarCodigo(evento) {
+    evento.preventDefault();
+    const titulo = el("codigo-titulo").value.trim();
+    const lenguaje = el("codigo-lenguaje").value;
+    const coleccion = el("codigo-coleccion").value.trim() || "Código estudiado";
+    const codigo = el("codigo-texto").value;
+    const btn = el("btn-estudiar-codigo");
+    const estado = el("estado-form-codigo");
+
+    const enviar = async () => {
+      btn.disabled = true;
+      estado.textContent = "Analizando código y creando fichas...";
+      estado.className = "estado-inline";
+      try {
+        const res = await peticion(
+          "/api/estudiar/codigo",
+          {
+            method: "POST",
+            body: JSON.stringify({ codigo, titulo, lenguaje, coleccion }),
+          },
+          enviar
+        );
+        el("codigo-titulo").value = "";
+        el("codigo-texto").value = "";
+        const n = Array.isArray(res.creadas) ? res.creadas.length : 0;
+        estado.textContent = `${n} ficha(s) de código creadas (${res.fuente}).`;
+        mostrarAvisoGlobal(`${n} ficha(s) de código listas para estudiar.`);
+        await cargarTodo(true);
+      } catch (err) {
+        if (err.status !== 401) {
+          estado.textContent = err.message || "No se pudo procesar el código.";
+          estado.className = "estado-inline es-error";
+        } else {
+          estado.textContent = "";
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    await enviar();
+  }
+
+  async function manejarIngestarMaterial(evento) {
+    evento.preventDefault();
+    const titulo = el("material-titulo").value.trim();
+    const coleccion = el("material-coleccion").value.trim() || "Material de estudio";
+    const contenido = el("material-texto").value;
+    const btn = el("btn-ingestar-material");
+    const estado = el("estado-form-material");
+
+    const enviar = async () => {
+      btn.disabled = true;
+      estado.textContent = "Generando fichas desde tus apuntes...";
+      estado.className = "estado-inline";
+      try {
+        const res = await peticion(
+          "/api/estudiar/material",
+          {
+            method: "POST",
+            body: JSON.stringify({ contenido, titulo, coleccion }),
+          },
+          enviar
+        );
+        el("material-titulo").value = "";
+        el("material-texto").value = "";
+        const n = Array.isArray(res.creadas) ? res.creadas.length : 0;
+        estado.textContent = `${n} ficha(s) generadas (${res.fuente}).`;
+        mostrarAvisoGlobal(`${n} ficha(s) de estudio añadidas.`);
+        await cargarTodo(true);
+      } catch (err) {
+        if (err.status !== 401) {
+          estado.textContent = err.message || "No se pudo procesar el material.";
+          estado.className = "estado-inline es-error";
+        } else {
+          estado.textContent = "";
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    await enviar();
+  }
+
+  async function manejarCrearColeccion(evento) {
+    evento.preventDefault();
+    const nombre = el("coleccion-nombre").value.trim();
+    const descripcion = el("coleccion-desc").value.trim();
+    const btn = el("btn-crear-coleccion");
+    const estado = el("estado-form-coleccion");
+
+    const enviar = async () => {
+      btn.disabled = true;
+      estado.textContent = "Creando colección...";
+      estado.className = "estado-inline";
+      try {
+        const col = await peticion(
+          "/api/colecciones",
+          { method: "POST", body: JSON.stringify({ nombre, descripcion }) },
+          enviar
+        );
+        el("coleccion-nombre").value = "";
+        el("coleccion-desc").value = "";
+        estado.textContent = `Colección «${col.nombre}» creada.`;
+        mostrarAvisoGlobal(`Colección «${col.nombre}» creada.`);
+        await cargarTodo(true);
+      } catch (err) {
+        if (err.status !== 401) {
+          estado.textContent = err.message || "No se pudo crear la colección.";
+          estado.className = "estado-inline es-error";
+        } else {
+          estado.textContent = "";
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    await enviar();
+  }
+
+  async function manejarImportarMazo(evento) {
+    evento.preventDefault();
+    const formato = el("importar-formato").value;
+    const nombreColeccion = el("importar-nombre").value.trim();
+    const datos = el("importar-datos").value;
+    const btn = el("btn-ejecutar-importar");
+    const estado = el("estado-form-importar");
+
+    const enviar = async () => {
+      btn.disabled = true;
+      estado.textContent = "Importando mazo...";
+      estado.className = "estado-inline";
+      try {
+        const res = await peticion(
+          "/api/colecciones/importar",
+          { method: "POST", body: JSON.stringify({ datos, formato, nombre_coleccion: nombreColeccion }) },
+          enviar
+        );
+        el("importar-datos").value = "";
+        el("importar-nombre").value = "";
+        const n = Array.isArray(res.importados) ? res.importados.length : 0;
+        estado.textContent = `Importadas ${n} ficha(s) (${res.omitidos} omitida(s)).`;
+        mostrarAvisoGlobal(`Importación completada: ${n} ficha(s).`);
+        await cargarTodo(true);
+      } catch (err) {
+        if (err.status !== 401) {
+          estado.textContent = err.message || "No se pudo importar el mazo.";
+          estado.className = "estado-inline es-error";
+        } else {
+          estado.textContent = "";
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    };
+    await enviar();
+  }
+
+  function activarTabCarga(tabId) {
+    const mapa = [
+      { tab: "tab-nota", panel: "panel-nota" },
+      { tab: "tab-codigo", panel: "panel-codigo" },
+      { tab: "tab-material", panel: "panel-material" },
+    ];
+    for (const item of mapa) {
+      const activo = item.tab === tabId;
+      const t = el(item.tab);
+      const p = el(item.panel);
+      if (t) t.setAttribute("aria-selected", activo ? "true" : "false");
+      if (p) p.hidden = !activo;
+    }
+  }
+
+  // Consulta en paralelo los endpoints de lectura para mantener sincronizada toda la página cada 5 segundos.
   async function cargarTodo(forzar = false) {
     if (recargaEnCurso && !forzar) return;
     recargaEnCurso = true;
     try {
-      const [estado, pendientes, temas, mazos, progreso, historial, bitacora] = await Promise.all([
+      const [estado, pendientes, temas, colecciones, mazos, progreso, brechas, historial, bitacora] = await Promise.all([
         peticion("/api/estado"),
         peticion("/api/preguntas/pendientes"),
         peticion("/api/temas"),
+        peticion("/api/colecciones"),
         peticion("/api/mazos"),
         peticion("/api/progreso"),
+        peticion("/api/brechas"),
         peticion("/api/historial?limite=6"),
         peticion("/api/bitacora?limite=40"),
       ]);
@@ -942,8 +1377,9 @@
       renderizarEstado(estado);
       renderizarPreguntas(pendientes);
       renderizarTemas(temas, forzar);
+      renderizarColecciones(colecciones, forzar);
       renderizarMazos(mazos, forzar);
-      renderizarProgreso(progreso, historial);
+      renderizarProgreso(progreso, historial, brechas);
       renderizarBitacora(bitacora);
     } catch (err) {
       mostrarAvisoGlobal(err.message || "No se pudo consultar el estado del agente.", true);
@@ -965,6 +1401,29 @@
     });
     el("form-token").addEventListener("submit", manejarEnvioToken);
     el("form-tema").addEventListener("submit", manejarAgregarTema);
+    if (el("form-codigo")) el("form-codigo").addEventListener("submit", manejarEstudiarCodigo);
+    if (el("form-material")) el("form-material").addEventListener("submit", manejarIngestarMaterial);
+    if (el("form-coleccion")) el("form-coleccion").addEventListener("submit", manejarCrearColeccion);
+    if (el("form-importar")) el("form-importar").addEventListener("submit", manejarImportarMazo);
+    if (el("btn-toggle-importar")) {
+      el("btn-toggle-importar").addEventListener("click", () => {
+        const panel = el("panel-importar");
+        const abierto = !panel.hidden;
+        panel.hidden = abierto;
+        el("btn-toggle-importar").setAttribute("aria-expanded", abierto ? "false" : "true");
+      });
+    }
+    for (const idTab of ["tab-nota", "tab-codigo", "tab-material"]) {
+      if (el(idTab)) {
+        el(idTab).addEventListener("click", () => activarTabCarga(idTab));
+      }
+    }
+    if (el("filtro-temas")) {
+      el("filtro-temas").addEventListener("input", () => renderizarTemas(temasCache, true));
+    }
+    if (el("filtro-temas-tipo")) {
+      el("filtro-temas-tipo").addEventListener("change", () => renderizarTemas(temasCache, true));
+    }
     el("filtro-mazos").addEventListener("input", () => {
       renderizarMazos(mazosCache, true);
     });

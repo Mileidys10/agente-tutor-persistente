@@ -686,6 +686,7 @@ h3 {
 input[type="text"],
 input[type="search"],
 input[type="password"],
+select,
 textarea {
   width: 100%;
   max-width: 100%;
@@ -698,6 +699,76 @@ textarea {
   font-family: inherit;
   font-size: 0.96rem;
   line-height: 1.45;
+}
+
+.codigo-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88rem;
+}
+
+.tabs-carga {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.9rem;
+}
+
+.tab-btn {
+  min-height: 44px;
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-alt);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab-btn[aria-selected="true"] {
+  background: var(--accent);
+  color: #FFFFFF;
+  border-color: var(--accent);
+}
+
+.fila-doble,
+.barra-filtros-temas {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.65rem;
+}
+
+.barra-filtros-temas {
+  margin-bottom: 0.85rem;
+}
+
+@media (min-width: 560px) {
+  .fila-doble {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .barra-filtros-temas {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 0.8fr);
+  }
+}
+
+.panel-importar {
+  margin-bottom: 0.9rem;
+  padding: 0.85rem;
+  border-radius: 8px;
+  border: 1px dashed var(--border-strong);
+  background: var(--surface-alt);
+}
+
+.form-edicion-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.7rem;
+  border-radius: 8px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
 }
 
 textarea {
@@ -733,6 +804,10 @@ textarea {
 @media (min-width: 520px) {
   .rejilla-progreso {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .rejilla-progreso.rejilla-progreso-5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 

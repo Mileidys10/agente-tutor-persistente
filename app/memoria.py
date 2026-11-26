@@ -23,18 +23,31 @@ from sqlalchemy import (
     Table,
     Text,
     create_engine,
+    delete,
     func,
     inspect,
-    text,
+    or_,
     select,
+    text,
     update,
 )
 from sqlalchemy.engine import Engine
 
-# Catálogo de esquemas (MetaData) con las 6 tablas que SQLAlchemy crea automáticamente al arrancar.
+# Catálogo de esquemas (MetaData) con las tablas que SQLAlchemy crea automáticamente al arrancar.
 metadata = MetaData()
 
-# Tabla 1: guarda tanto tus temas propios como las DevCards presentadas, junto con su estado SM-2.
+# Tabla de colecciones personalizadas para agrupar apuntes, fragmentos de código o materias.
+colecciones = Table(
+    "colecciones",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("nombre", String(120), nullable=False),
+    Column("descripcion", Text, nullable=False, default=""),
+    Column("activa", Integer, nullable=False, default=1),
+    Column("creada", DateTime(timezone=True), nullable=False),
+)
+
+# Tabla 1: guarda tanto tus temas propios, código, material y DevCards presentadas, junto con su estado SM-2.
 temas = Table(
     "temas",
     metadata,
@@ -42,8 +55,17 @@ temas = Table(
     Column("nombre", String(200), nullable=False),
     Column("notas", Text, nullable=False, default=""),
     Column("origen", String(20), nullable=False, default="usuario"),  # usuario | devcards
+    Column("tipo", String(20), nullable=False, default="nota"),  # nota | codigo | devcard | material
+    Column("coleccion_id", Integer, ForeignKey("colecciones.id", ondelete="SET NULL"), nullable=True),
     Column("categoria", String(120), nullable=False, default=""),
     Column("ref_externa", String(60), unique=True),  # id de la DevCard (p. ej. "poo-01")
+    Column("codigo", Text, nullable=False, default=""),
+    Column("lenguaje", String(40), nullable=False, default=""),
+    Column("analogia", Text, nullable=False, default=""),
+    Column("idea_clave", Text, nullable=False, default=""),
+    Column("etiquetas", Text, nullable=False, default=""),
+    Column("en_refuerzo", Integer, nullable=False, default=0),
+    Column("aciertos_seguidos", Integer, nullable=False, default=0),
     Column("repeticiones", Integer, nullable=False, default=0),
     Column("intervalo_dias", Float, nullable=False, default=0.0),
     Column("facilidad", Float, nullable=False, default=2.5),
@@ -115,6 +137,16 @@ latido = Table(
     Column("arranques", Integer, nullable=False, default=0),
 )
 
+# Tabla 7: registro por fecha UTC para calcular rachas de estudio diarias.
+actividad_diaria = Table(
+    "actividad_diaria",
+    metadata,
+    Column("fecha", String(10), primary_key=True),  # YYYY-MM-DD en UTC
+    Column("respuestas", Integer, nullable=False, default=0),
+    Column("aciertos", Integer, nullable=False, default=0),
+    Column("actualizado", DateTime(timezone=True), nullable=False),
+)
+
 
 # Devuelve la hora actual siempre en UTC para evitar desfases entre el servidor de Render y el navegador.
 def ahora() -> datetime:
@@ -140,6 +172,10 @@ def _fila(row: Any) -> dict[str, Any]:
         datos["opciones"] = json.loads(datos["opciones"]) if datos["opciones"] else None
     if "requiere_lectura" in datos:  # solo "requiere" mientras no se haya marcado como leída
         datos["requiere_lectura"] = bool(datos["requiere_lectura"]) and datos.get("leida_en") is None
+    if "activa" in datos:
+        datos["activa"] = bool(datos["activa"])
+    if "en_refuerzo" in datos:
+        datos["en_refuerzo"] = bool(datos["en_refuerzo"])
     return datos
 
 
@@ -160,6 +196,17 @@ class Memoria:
         "preguntas": {
             "requiere_lectura": "INTEGER NOT NULL DEFAULT 0",
             "leida_en": {"postgresql": "TIMESTAMP WITH TIME ZONE", "default": "TIMESTAMP"},
+        },
+        "temas": {
+            "tipo": "VARCHAR(20) NOT NULL DEFAULT 'nota'",
+            "coleccion_id": "INTEGER",
+            "codigo": "TEXT NOT NULL DEFAULT ''",
+            "lenguaje": "VARCHAR(40) NOT NULL DEFAULT ''",
+            "analogia": "TEXT NOT NULL DEFAULT ''",
+            "idea_clave": "TEXT NOT NULL DEFAULT ''",
+            "etiquetas": "TEXT NOT NULL DEFAULT ''",
+            "en_refuerzo": "INTEGER NOT NULL DEFAULT 0",
+            "aciertos_seguidos": "INTEGER NOT NULL DEFAULT 0",
         },
     }
 
@@ -198,23 +245,157 @@ class Memoria:
             fila = c.execute(select(latido).where(latido.c.id == 1)).first()
         return _fila(fila) if fila else {}
 
+    # ---- colecciones personalizadas -----------------------------------------
+    def crear_coleccion(self, nombre: str, descripcion: str = "") -> dict[str, Any]:
+        limpio = nombre.strip()
+        if len(limpio) < 2:
+            raise ValueError("El nombre de la colección debe tener al menos 2 caracteres")
+        t = ahora()
+        with self.engine.begin() as c:
+            existe = c.execute(
+                select(colecciones.c.id).where(func.lower(colecciones.c.nombre) == limpio.lower())
+            ).first()
+            if existe:
+                raise ValueError(f"Ya existe una colección llamada «{limpio}»")
+            cid = c.execute(
+                colecciones.insert().values(nombre=limpio[:120], descripcion=descripcion.strip()[:500], activa=1, creada=t)
+            ).inserted_primary_key[0]
+        return self.obtener_coleccion(int(cid))  # type: ignore[return-value]
+
+    def obtener_coleccion(self, coleccion_id: int) -> Optional[dict[str, Any]]:
+        with self.engine.connect() as c:
+            fila = c.execute(select(colecciones).where(colecciones.c.id == coleccion_id)).first()
+            if not fila:
+                return None
+            datos = _fila(fila)
+            conteo = c.execute(
+                select(
+                    func.count(temas.c.id).label("total"),
+                    func.sum(func.coalesce(temas.c.en_refuerzo, 0)).label("refuerzo"),
+                ).where(temas.c.coleccion_id == coleccion_id)
+            ).first()
+            dominados = c.execute(
+                select(func.count(temas.c.id)).where(temas.c.coleccion_id == coleccion_id, temas.c.intervalo_dias >= 6)
+            ).scalar_one()
+        datos["temas"] = int(conteo.total or 0) if conteo else 0
+        datos["en_refuerzo"] = int(conteo.refuerzo or 0) if conteo else 0
+        datos["dominados"] = int(dominados or 0)
+        return datos
+
+    def obtener_coleccion_por_nombre(self, nombre: str) -> Optional[dict[str, Any]]:
+        limpio = nombre.strip()
+        if not limpio:
+            return None
+        with self.engine.connect() as c:
+            fila = c.execute(select(colecciones.c.id).where(func.lower(colecciones.c.nombre) == limpio.lower())).first()
+        return self.obtener_coleccion(int(fila[0])) if fila else None
+
+    def obtener_o_crear_coleccion(self, nombre: str, descripcion: str = "") -> dict[str, Any]:
+        existente = self.obtener_coleccion_por_nombre(nombre)
+        if existente is not None:
+            return existente
+        return self.crear_coleccion(nombre, descripcion)
+
+    def listar_colecciones(self) -> list[dict[str, Any]]:
+        with self.engine.connect() as c:
+            filas = c.execute(select(colecciones).order_by(colecciones.c.id.asc())).all()
+            todos_temas = c.execute(
+                select(temas.c.coleccion_id, temas.c.intervalo_dias, temas.c.en_refuerzo)
+                .where(temas.c.coleccion_id.is_not(None))
+            ).all()
+        totales: dict[int, int] = {}
+        dominados: dict[int, int] = {}
+        refuerzos: dict[int, int] = {}
+        for cid, intervalo, ref in todos_temas:
+            k = int(cid)
+            totales[k] = totales.get(k, 0) + 1
+            if float(intervalo or 0) >= 6:
+                dominados[k] = dominados.get(k, 0) + 1
+            if ref:
+                refuerzos[k] = refuerzos.get(k, 0) + 1
+        resultado = []
+        for f in filas:
+            d = _fila(f)
+            cid = int(d["id"])
+            d["temas"] = totales.get(cid, 0)
+            d["dominados"] = dominados.get(cid, 0)
+            d["en_refuerzo"] = refuerzos.get(cid, 0)
+            resultado.append(d)
+        return resultado
+
+    def actualizar_coleccion(
+        self, coleccion_id: int, nombre: Optional[str] = None,
+        descripcion: Optional[str] = None, activa: Optional[bool] = None,
+    ) -> dict[str, Any]:
+        valores: dict[str, Any] = {}
+        with self.engine.begin() as c:
+            actual = c.execute(select(colecciones).where(colecciones.c.id == coleccion_id)).first()
+            if actual is None:
+                raise LookupError("No existe esa colección")
+            if nombre is not None:
+                limpio = nombre.strip()
+                if len(limpio) < 2:
+                    raise ValueError("El nombre de la colección debe tener al menos 2 caracteres")
+                dup = c.execute(
+                    select(colecciones.c.id).where(
+                        func.lower(colecciones.c.nombre) == limpio.lower(),
+                        colecciones.c.id != coleccion_id,
+                    )
+                ).first()
+                if dup:
+                    raise ValueError(f"Ya existe una colección llamada «{limpio}»")
+                valores["nombre"] = limpio[:120]
+            if descripcion is not None:
+                valores["descripcion"] = descripcion.strip()[:500]
+            if activa is not None:
+                valores["activa"] = 1 if activa else 0
+            if valores:
+                c.execute(update(colecciones).where(colecciones.c.id == coleccion_id).values(**valores))
+        return self.obtener_coleccion(coleccion_id)  # type: ignore[return-value]
+
+    def borrar_coleccion(self, coleccion_id: int, borrar_temas: bool = False) -> bool:
+        with self.engine.begin() as c:
+            existe = c.execute(select(colecciones.c.id).where(colecciones.c.id == coleccion_id)).first()
+            if not existe:
+                return False
+            ids_temas = [int(r[0]) for r in c.execute(select(temas.c.id).where(temas.c.coleccion_id == coleccion_id)).all()]
+            if borrar_temas and ids_temas:
+                ids_preg = select(preguntas.c.id).where(preguntas.c.tema_id.in_(ids_temas))
+                c.execute(respuestas.delete().where(respuestas.c.pregunta_id.in_(ids_preg)))
+                c.execute(preguntas.delete().where(preguntas.c.tema_id.in_(ids_temas)))
+                c.execute(temas.delete().where(temas.c.coleccion_id == coleccion_id))
+            elif ids_temas:
+                c.execute(update(temas).where(temas.c.coleccion_id == coleccion_id).values(coleccion_id=None))
+            c.execute(delete(colecciones).where(colecciones.c.id == coleccion_id))
+            return True
+
     # ---- temas --------------------------------------------------------------
-    # Inserta un tema propio (origen="usuario", rechazando duplicados) o una DevCard nueva (origen="devcards").
-    # Lo llaman AgenteTutor.agregar_tema() y el paso DECIDIR (2) de AgenteTutor.ciclo().
+    # Inserta un tema propio (origen="usuario", rechazando duplicados en la misma colección) o una DevCard nueva.
+    # Lo llaman AgenteTutor.agregar_tema(), estudiar_codigo(), ingestar_material() y el ciclo autónomo.
     def crear_tema(
-        self, nombre: str, notas: str, origen: str = "usuario", categoria: str = "", ref_externa: Optional[str] = None,
+        self, nombre: str, notas: str, origen: str = "usuario", categoria: str = "",
+        ref_externa: Optional[str] = None, tipo: str = "nota", coleccion_id: Optional[int] = None,
+        codigo: str = "", lenguaje: str = "", analogia: str = "", idea_clave: str = "", etiquetas: str = "",
     ) -> dict[str, Any]:
         t = ahora()
         with self.engine.begin() as c:
             if origen == "usuario":
+                cond_col = temas.c.coleccion_id.is_(None) if coleccion_id is None else temas.c.coleccion_id == coleccion_id
                 existe = c.execute(
-                    select(temas.c.id).where(temas.c.origen == "usuario", func.lower(temas.c.nombre) == nombre.lower())
+                    select(temas.c.id).where(
+                        temas.c.origen == "usuario",
+                        cond_col,
+                        func.lower(temas.c.nombre) == nombre.lower(),
+                    )
                 ).first()
                 if existe:
                     raise ValueError(f"Ya existe un tema llamado «{nombre}»")
             tid = c.execute(
                 temas.insert().values(
-                    nombre=nombre, notas=notas, origen=origen, categoria=categoria, ref_externa=ref_externa,
+                    nombre=nombre[:200], notas=notas, origen=origen, tipo=tipo,
+                    coleccion_id=coleccion_id, categoria=categoria, ref_externa=ref_externa,
+                    codigo=codigo, lenguaje=lenguaje[:40], analogia=analogia, idea_clave=idea_clave,
+                    etiquetas=etiquetas, en_refuerzo=0, aciertos_seguidos=0,
                     repeticiones=0, intervalo_dias=0.0, facilidad=2.5,
                     proximo_repaso=t, aciertos=0, fallos=0, creado=t,
                 )
@@ -232,6 +413,65 @@ class Memoria:
         with self.engine.connect() as c:
             return [_fila(f) for f in c.execute(select(temas).order_by(temas.c.proximo_repaso))]
 
+    def buscar_temas(
+        self, q: str = "", coleccion_id: Optional[int] = None, tipo: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        stmt = select(temas)
+        if coleccion_id is not None:
+            stmt = stmt.where(temas.c.coleccion_id == coleccion_id)
+        if tipo:
+            stmt = stmt.where(temas.c.tipo == tipo.strip())
+        termino = q.strip().lower()
+        if termino:
+            patron = f"%{termino}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(temas.c.nombre).like(patron),
+                    func.lower(temas.c.notas).like(patron),
+                    func.lower(temas.c.etiquetas).like(patron),
+                    func.lower(temas.c.lenguaje).like(patron),
+                    func.lower(temas.c.categoria).like(patron),
+                )
+            )
+        with self.engine.connect() as c:
+            return [_fila(f) for f in c.execute(stmt.order_by(temas.c.proximo_repaso))]
+
+    def actualizar_tema(self, tema_id: int, **campos: Any) -> dict[str, Any]:
+        permitidos = {
+            "nombre", "notas", "codigo", "lenguaje", "analogia",
+            "idea_clave", "etiquetas", "coleccion_id", "tipo", "en_refuerzo", "proximo_repaso",
+        }
+        valores: dict[str, Any] = {}
+        for k, v in campos.items():
+            if k not in permitidos or v is None and k != "coleccion_id":
+                continue
+            if k == "nombre":
+                limpio = str(v).strip()
+                if len(limpio) < 2:
+                    raise ValueError("El nombre del tema debe tener al menos 2 caracteres")
+                valores[k] = limpio[:200]
+            elif k == "lenguaje":
+                valores[k] = str(v).strip()[:40]
+            elif k == "en_refuerzo":
+                valores[k] = 1 if v else 0
+            else:
+                valores[k] = v
+        with self.engine.begin() as c:
+            actual = c.execute(select(temas).where(temas.c.id == tema_id)).first()
+            if actual is None:
+                raise LookupError("No existe ese tema")
+            if valores:
+                c.execute(update(temas).where(temas.c.id == tema_id).values(**valores))
+        return self.obtener_tema(tema_id)  # type: ignore[return-value]
+
+    def marcar_refuerzo(self, tema_id: int, en_refuerzo: bool) -> None:
+        with self.engine.begin() as c:
+            c.execute(
+                update(temas)
+                .where(temas.c.id == tema_id)
+                .values(en_refuerzo=1 if en_refuerzo else 0, aciertos_seguidos=0 if en_refuerzo else temas.c.aciertos_seguidos)
+            )
+
     # Elimina un tema junto con sus preguntas y respuestas (DELETE /api/temas/{id} en app/main.py).
     def borrar_tema(self, tema_id: int) -> bool:
         with self.engine.begin() as c:  # borrado explícito en cascada (SQLite no aplica ON DELETE por defecto)
@@ -243,17 +483,29 @@ class Memoria:
     # Guarda los nuevos valores SM-2 y suma +1 en aciertos o fallos; lo llama AgenteTutor.responder().
     def actualizar_repaso(
         self, tema_id: int, repeticiones: int, intervalo_dias: float, facilidad: float,
-        proximo_repaso: datetime, acierto: bool,
-    ) -> None:
+        proximo_repaso: datetime, acierto: bool, nota: Optional[int] = None,
+    ) -> dict[str, Any]:
+        buen_acierto = (nota >= 4) if nota is not None else acierto
         with self.engine.begin() as c:
+            actual = c.execute(
+                select(temas.c.aciertos_seguidos, temas.c.en_refuerzo).where(temas.c.id == tema_id)
+            ).first()
+            seguidos_prev = int(actual.aciertos_seguidos or 0) if actual else 0
+            refuerzo_prev = bool(actual.en_refuerzo) if actual else False
+            seguidos = seguidos_prev + 1 if buen_acierto else 0
+            supero_refuerzo = refuerzo_prev and seguidos >= 2
+            nuevo_refuerzo = 0 if supero_refuerzo else (1 if refuerzo_prev else 0)
             c.execute(
                 update(temas).where(temas.c.id == tema_id).values(
                     repeticiones=repeticiones, intervalo_dias=intervalo_dias, facilidad=facilidad,
                     proximo_repaso=proximo_repaso,
                     aciertos=temas.c.aciertos + (1 if acierto else 0),
                     fallos=temas.c.fallos + (0 if acierto else 1),
+                    aciertos_seguidos=seguidos,
+                    en_refuerzo=nuevo_refuerzo,
                 )
             )
+        return {"supero_refuerzo": supero_refuerzo, "aciertos_seguidos": seguidos}
 
     # ---- preguntas y respuestas ---------------------------------------------
     # Guarda en la tabla preguntas una nueva pregunta pendiente creada por AgenteTutor._preparar_pregunta().
@@ -272,11 +524,25 @@ class Memoria:
             ).inserted_primary_key[0]
         return self.obtener_pregunta(int(pid))  # type: ignore[return-value]
 
-    # Consulta una pregunta unida con el nombre y ref_externa de su tema (usada en responder y marcar_leida).
+    # Consulta una pregunta unida con los metadatos de su tema (usada en responder, marcar_leida y lectura_de).
     def obtener_pregunta(self, pregunta_id: int) -> Optional[dict[str, Any]]:
         with self.engine.connect() as c:
             fila = c.execute(
-                select(preguntas, temas.c.nombre.label("tema"), temas.c.ref_externa)
+                select(
+                    preguntas,
+                    temas.c.nombre.label("tema"),
+                    temas.c.origen,
+                    temas.c.tipo,
+                    temas.c.coleccion_id,
+                    temas.c.categoria,
+                    temas.c.ref_externa,
+                    temas.c.notas,
+                    temas.c.codigo,
+                    temas.c.lenguaje,
+                    temas.c.analogia,
+                    temas.c.idea_clave,
+                    temas.c.en_refuerzo,
+                )
                 .join(temas, temas.c.id == preguntas.c.tema_id)
                 .where(preguntas.c.id == pregunta_id)
             ).first()
@@ -286,7 +552,21 @@ class Memoria:
     def pendientes(self) -> list[dict[str, Any]]:
         with self.engine.connect() as c:
             filas = c.execute(
-                select(preguntas, temas.c.nombre.label("tema"), temas.c.ref_externa)
+                select(
+                    preguntas,
+                    temas.c.nombre.label("tema"),
+                    temas.c.origen,
+                    temas.c.tipo,
+                    temas.c.coleccion_id,
+                    temas.c.categoria,
+                    temas.c.ref_externa,
+                    temas.c.notas,
+                    temas.c.codigo,
+                    temas.c.lenguaje,
+                    temas.c.analogia,
+                    temas.c.idea_clave,
+                    temas.c.en_refuerzo,
+                )
                 .join(temas, temas.c.id == preguntas.c.tema_id)
                 .where(preguntas.c.estado == "pendiente")
                 .order_by(preguntas.c.creada)
@@ -388,3 +668,42 @@ class Memoria:
     def leer_bitacora(self, limite: int = 50) -> list[dict[str, Any]]:
         with self.engine.connect() as c:
             return [_fila(f) for f in c.execute(select(bitacora).order_by(bitacora.c.id.desc()).limit(limite))]
+
+    # ---- actividad diaria y rachas ------------------------------------------
+    def registrar_actividad_diaria(self, acierto: bool, fecha_dt: Optional[datetime] = None) -> None:
+        momento = _utc(fecha_dt) or ahora()
+        clave = momento.strftime("%Y-%m-%d")
+        with self.engine.begin() as c:
+            fila = c.execute(select(actividad_diaria).where(actividad_diaria.c.fecha == clave)).first()
+            if fila is None:
+                c.execute(
+                    actividad_diaria.insert().values(
+                        fecha=clave, respuestas=1, aciertos=1 if acierto else 0, actualizado=momento
+                    )
+                )
+            else:
+                c.execute(
+                    update(actividad_diaria)
+                    .where(actividad_diaria.c.fecha == clave)
+                    .values(
+                        respuestas=actividad_diaria.c.respuestas + 1,
+                        aciertos=actividad_diaria.c.aciertos + (1 if acierto else 0),
+                        actualizado=momento,
+                    )
+                )
+
+    def calcular_racha_dias(self, hoy_dt: Optional[datetime] = None) -> int:
+        ref = (_utc(hoy_dt) or ahora()).date()
+        with self.engine.connect() as c:
+            fechas = {
+                str(r[0])
+                for r in c.execute(select(actividad_diaria.c.fecha).where(actividad_diaria.c.respuestas > 0)).all()
+            }
+        if not fechas:
+            return 0
+        cursor = ref if ref.isoformat() in fechas else ref - timedelta(days=1)
+        racha = 0
+        while cursor.isoformat() in fechas:
+            racha += 1
+            cursor = cursor - timedelta(days=1)
+        return racha

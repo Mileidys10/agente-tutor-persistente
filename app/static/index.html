@@ -52,7 +52,8 @@
 
       <nav class="nav-secciones" aria-label="Secciones de la página">
         <a href="#seccion-estudiar">Estudiar</a>
-        <a href="#seccion-temas">Mis temas</a>
+        <a href="#seccion-temas">Mis temas y código</a>
+        <a href="#seccion-colecciones">Colecciones</a>
         <a href="#seccion-mazos">Mazos DevCards</a>
         <a href="#seccion-progreso">Progreso</a>
         <a href="#seccion-bitacora">Bitácora</a>
@@ -69,7 +70,7 @@
         <h2 id="titulo-estudiar">Estudiar</h2>
         <span id="badge-pendientes" class="pildora pildora-azul">0 pendientes</span>
       </div>
-      <p class="subtitulo-estudiar">Las DevCards nuevas muestran primero la ficha de estudio antes de preguntar.</p>
+      <p class="subtitulo-estudiar">Las fichas nuevas de código, apuntes o DevCards muestran primero su lectura guía antes de preguntar.</p>
 
       <div id="resultado-respuesta" class="resultado-respuesta" aria-live="polite" hidden></div>
 
@@ -78,14 +79,14 @@
       </div>
     </section>
 
-    <!-- 2. PROGRESO -->
+    <!-- 2. PROGRESO Y BRECHAS -->
     <section id="seccion-progreso" class="panel" aria-labelledby="titulo-progreso">
       <div class="panel-cabecera">
         <h2 id="titulo-progreso">Progreso</h2>
         <span class="subtitulo-panel">Repetición espaciada SM-2</span>
       </div>
 
-      <dl class="rejilla-progreso" aria-label="Resumen de aprendizaje">
+      <dl class="rejilla-progreso rejilla-progreso-5" aria-label="Resumen de aprendizaje">
         <div class="kpi-caja">
           <dt>Temas</dt>
           <dd id="prog-temas">0</dd>
@@ -102,9 +103,20 @@
           <dt>Aciertos</dt>
           <dd id="prog-porcentaje">—</dd>
         </div>
+        <div class="kpi-caja">
+          <dt>Racha</dt>
+          <dd id="prog-racha">0 d</dd>
+        </div>
       </dl>
 
       <div class="subbloques-progreso">
+        <div>
+          <h3 class="subtitulo-lista">Brechas en refuerzo</h3>
+          <p id="brechas-recomendacion" class="texto-suave">Analizando brechas de estudio...</p>
+          <ul id="lista-brechas" class="lista-compacta">
+            <li class="texto-suave">Sin temas en refuerzo guiado.</li>
+          </ul>
+        </div>
         <div>
           <h3 class="subtitulo-lista">Temas más difíciles</h3>
           <ul id="lista-dificiles" class="lista-compacta">
@@ -120,36 +132,184 @@
       </div>
     </section>
 
-    <!-- 3. MIS TEMAS -->
+    <!-- 3. MIS TEMAS, CÓDIGO Y MATERIAL -->
     <section id="seccion-temas" class="panel" aria-labelledby="titulo-temas">
       <div class="panel-cabecera">
-        <h2 id="titulo-temas">Mis temas</h2>
+        <h2 id="titulo-temas">Mis temas y código</h2>
         <span id="badge-temas" class="pildora pildora-neutra">0 temas</span>
       </div>
 
-      <form id="form-tema" class="formulario-tema">
+      <div class="tabs-carga" role="tablist" aria-label="Modo de carga de estudio">
+        <button type="button" id="tab-nota" class="tab-btn" role="tab" aria-selected="true" aria-controls="panel-nota">Nota rápida</button>
+        <button type="button" id="tab-codigo" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-codigo">Estudiar código</button>
+        <button type="button" id="tab-material" class="tab-btn" role="tab" aria-selected="false" aria-controls="panel-material">Ingestar apuntes</button>
+      </div>
+
+      <div id="panel-nota" role="tabpanel" aria-labelledby="tab-nota">
+        <form id="form-tema" class="formulario-tema">
+          <div class="campo">
+            <label for="tema-nombre">Nombre del tema</label>
+            <input id="tema-nombre" name="nombre" type="text" minlength="2" maxlength="200" required
+                   placeholder="Ej. Índices B-Tree en PostgreSQL">
+          </div>
+          <div class="campo">
+            <label for="tema-coleccion">Colección (opcional)</label>
+            <select id="tema-coleccion" name="coleccion_id">
+              <option value="">Sin colección</option>
+            </select>
+          </div>
+          <div class="campo">
+            <label for="tema-notas">Notas de estudio</label>
+            <textarea id="tema-notas" name="notas" rows="3" maxlength="8000"
+                      placeholder="Escribe definiciones o puntos clave. El agente usará estas notas para preguntarte."></textarea>
+          </div>
+          <div class="fila-acciones-form">
+            <button type="submit" id="btn-agregar-tema" class="btn btn-primario">Agregar tema</button>
+            <p id="estado-form-tema" class="estado-inline" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </div>
+
+      <div id="panel-codigo" role="tabpanel" aria-labelledby="tab-codigo" hidden>
+        <form id="form-codigo" class="formulario-tema">
+          <div class="fila-doble">
+            <div class="campo">
+              <label for="codigo-titulo">Título (opcional)</label>
+              <input id="codigo-titulo" type="text" maxlength="200" placeholder="Ej. Validador JWT en FastAPI">
+            </div>
+            <div class="campo">
+              <label for="codigo-lenguaje">Lenguaje (opcional)</label>
+              <select id="codigo-lenguaje">
+                <option value="">Detectar automáticamente</option>
+                <option value="python">Python</option>
+                <option value="javascript">JavaScript</option>
+                <option value="typescript">TypeScript</option>
+                <option value="sql">SQL</option>
+                <option value="java">Java</option>
+                <option value="go">Go</option>
+                <option value="bash">Bash</option>
+              </select>
+            </div>
+          </div>
+          <div class="campo">
+            <label for="codigo-coleccion">Colección destino</label>
+            <input id="codigo-coleccion" type="text" maxlength="120" value="Código estudiado" placeholder="Código estudiado">
+          </div>
+          <div class="campo">
+            <label for="codigo-texto">Fragmento de código (10 a 12 000 caracteres)</label>
+            <textarea id="codigo-texto" class="codigo-input" rows="5" minlength="10" maxlength="12000" required
+                      placeholder="Pega aquí una función, consulta SQL o algoritmo que quieras dominar..."></textarea>
+          </div>
+          <div class="fila-acciones-form">
+            <button type="submit" id="btn-estudiar-codigo" class="btn btn-primario">Descomponer código en fichas</button>
+            <p id="estado-form-codigo" class="estado-inline" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </div>
+
+      <div id="panel-material" role="tabpanel" aria-labelledby="tab-material" hidden>
+        <form id="form-material" class="formulario-tema">
+          <div class="fila-doble">
+            <div class="campo">
+              <label for="material-titulo">Título del documento (opcional)</label>
+              <input id="material-titulo" type="text" maxlength="200" placeholder="Ej. Resumen Redes TCP/IP">
+            </div>
+            <div class="campo">
+              <label for="material-coleccion">Colección destino</label>
+              <input id="material-coleccion" type="text" maxlength="120" value="Material de estudio" placeholder="Material de estudio">
+            </div>
+          </div>
+          <div class="campo">
+            <label for="material-texto">Apuntes o Markdown (20 a 25 000 caracteres)</label>
+            <textarea id="material-texto" rows="5" minlength="20" maxlength="25000" required
+                      placeholder="Pega apuntes de clase, encabezados ## en Markdown o listas de conceptos..."></textarea>
+          </div>
+          <div class="fila-acciones-form">
+            <button type="submit" id="btn-ingestar-material" class="btn btn-primario">Generar fichas de estudio</button>
+            <p id="estado-form-material" class="estado-inline" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </div>
+
+      <div class="barra-filtros-temas">
         <div class="campo">
-          <label for="tema-nombre">Nombre del tema</label>
-          <input id="tema-nombre" name="nombre" type="text" minlength="2" maxlength="200" required
-                 placeholder="Ej. Índices B-Tree en PostgreSQL">
+          <label for="filtro-temas">Buscar en mis temas</label>
+          <input id="filtro-temas" type="search" placeholder="Filtrar por título, notas, lenguaje o etiqueta...">
         </div>
         <div class="campo">
-          <label for="tema-notas">Notas de estudio</label>
-          <textarea id="tema-notas" name="notas" rows="3" maxlength="8000"
-                    placeholder="Escribe definiciones o puntos clave. El agente usará estas notas para preguntarte."></textarea>
+          <label for="filtro-temas-tipo">Tipo</label>
+          <select id="filtro-temas-tipo">
+            <option value="">Todos</option>
+            <option value="codigo">Código</option>
+            <option value="material">Apuntes</option>
+            <option value="nota">Notas</option>
+            <option value="devcard">DevCards</option>
+          </select>
         </div>
-        <div class="fila-acciones-form">
-          <button type="submit" id="btn-agregar-tema" class="btn btn-primario">Agregar tema</button>
-          <p id="estado-form-tema" class="estado-inline" role="status" aria-live="polite"></p>
-        </div>
-      </form>
+      </div>
 
       <div id="lista-temas" class="lista-temas">
         <p class="estado-vacio">Cargando temas...</p>
       </div>
     </section>
 
-    <!-- 4. MAZOS DEVCARDS -->
+    <!-- 4. COLECCIONES PERSONALIZADAS E IMPORTACIÓN -->
+    <section id="seccion-colecciones" class="panel" aria-labelledby="titulo-colecciones">
+      <div class="panel-cabecera">
+        <h2 id="titulo-colecciones">Colecciones</h2>
+        <span id="badge-colecciones" class="pildora pildora-neutra">0 colecciones</span>
+      </div>
+
+      <form id="form-coleccion" class="formulario-tema">
+        <div class="fila-doble">
+          <div class="campo">
+            <label for="coleccion-nombre">Nueva colección</label>
+            <input id="coleccion-nombre" type="text" minlength="2" maxlength="120" required placeholder="Ej. Arquitectura Cloud">
+          </div>
+          <div class="campo">
+            <label for="coleccion-desc">Descripción (opcional)</label>
+            <input id="coleccion-desc" type="text" maxlength="500" placeholder="Notas del semestre o proyecto">
+          </div>
+        </div>
+        <div class="fila-acciones-form">
+          <button type="submit" id="btn-crear-coleccion" class="btn btn-primario">Crear colección</button>
+          <button type="button" id="btn-toggle-importar" class="btn btn-secundario" aria-expanded="false" aria-controls="panel-importar">Importar mazo</button>
+          <p id="estado-form-coleccion" class="estado-inline" role="status" aria-live="polite"></p>
+        </div>
+      </form>
+
+      <div id="panel-importar" class="panel-importar" hidden>
+        <form id="form-importar" class="formulario-tema">
+          <div class="fila-doble">
+            <div class="campo">
+              <label for="importar-formato">Formato</label>
+              <select id="importar-formato">
+                <option value="md">Markdown (.md)</option>
+                <option value="json">JSON (.json)</option>
+              </select>
+            </div>
+            <div class="campo">
+              <label for="importar-nombre">Nombre destino (opcional)</label>
+              <input id="importar-nombre" type="text" maxlength="120" placeholder="Usa el del archivo si se omite">
+            </div>
+          </div>
+          <div class="campo">
+            <label for="importar-datos">Contenido del mazo</label>
+            <textarea id="importar-datos" class="codigo-input" rows="4" required placeholder="Pega aquí el JSON o Markdown exportado..."></textarea>
+          </div>
+          <div class="fila-acciones-form">
+            <button type="submit" id="btn-ejecutar-importar" class="btn btn-primario">Importar ahora</button>
+            <p id="estado-form-importar" class="estado-inline" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </div>
+
+      <div id="lista-colecciones" class="lista-mazos">
+        <p class="estado-vacio">Sin colecciones creadas todavía.</p>
+      </div>
+    </section>
+
+    <!-- 5. MAZOS DEVCARDS -->
     <section id="seccion-mazos" class="panel" aria-labelledby="titulo-mazos">
       <div class="panel-cabecera">
         <h2 id="titulo-mazos">Mazos DevCards</h2>
@@ -166,7 +326,7 @@
       </div>
     </section>
 
-    <!-- 5. BITÁCORA DEL AGENTE -->
+    <!-- 6. BITÁCORA DEL AGENTE -->
     <section id="seccion-bitacora" class="panel panel-ancho" aria-labelledby="titulo-bitacora">
       <div class="panel-cabecera">
         <h2 id="titulo-bitacora">Bitácora del agente</h2>
@@ -182,7 +342,7 @@
   <footer class="pie">
     <div class="contenedor pie-interior">
       <p>
-        Agente Tutor Persistente · Repetición espaciada SM-2 · Banco
+        Agente Tutor Persistente v2.0 · Repetición espaciada SM-2 · Banco
         <span id="pie-devcards">1 295</span> DevCards (MIT).
       </p>
       <p class="pie-enlaces">

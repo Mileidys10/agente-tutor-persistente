@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, Field
@@ -81,7 +81,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 # Instancia principal de FastAPI (expone automáticamente Swagger UI en /docs).
-app = FastAPI(title="Agente Tutor Persistente", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Agente Tutor Persistente", version="2.0.0", lifespan=lifespan)
 
 
 # Middleware HTTP que intercepta cualquier llamada hacia /mcp para exigir la misma clave TUTOR_TOKEN.
@@ -99,6 +99,61 @@ async def proteger_mcp(request, call_next):  # el endpoint MCP exige el mismo to
 class TemaNuevo(BaseModel):
     nombre: str = Field(..., min_length=2, max_length=200)
     notas: str = Field("", max_length=8000)
+    coleccion_id: Optional[int] = None
+    tipo: str = Field("nota", max_length=20)
+    codigo: str = Field("", max_length=12000)
+    lenguaje: str = Field("", max_length=40)
+    analogia: str = Field("", max_length=2000)
+    idea_clave: str = Field("", max_length=1000)
+    etiquetas: str = Field("", max_length=500)
+
+
+class TemaEdicion(BaseModel):
+    nombre: Optional[str] = Field(None, min_length=2, max_length=200)
+    notas: Optional[str] = Field(None, max_length=8000)
+    coleccion_id: Optional[int] = None
+    codigo: Optional[str] = Field(None, max_length=12000)
+    lenguaje: Optional[str] = Field(None, max_length=40)
+    analogia: Optional[str] = Field(None, max_length=2000)
+    idea_clave: Optional[str] = Field(None, max_length=1000)
+    etiquetas: Optional[str] = Field(None, max_length=500)
+
+
+class PosponerBody(BaseModel):
+    dias: float = Field(1.0, gt=0, le=365)
+
+
+class ColeccionNueva(BaseModel):
+    nombre: str = Field(..., min_length=2, max_length=120)
+    descripcion: str = Field("", max_length=500)
+
+
+class ColeccionCambio(BaseModel):
+    nombre: Optional[str] = Field(None, min_length=2, max_length=120)
+    descripcion: Optional[str] = Field(None, max_length=500)
+    activa: Optional[bool] = None
+
+
+class ImportacionBody(BaseModel):
+    datos: Any
+    formato: str = Field("json", max_length=20)
+    nombre_coleccion: str = Field("", max_length=120)
+
+
+class CodigoEstudio(BaseModel):
+    codigo: str = Field(..., min_length=10, max_length=12000)
+    titulo: str = Field("", max_length=200)
+    lenguaje: str = Field("", max_length=40)
+    coleccion: str = Field("Código estudiado", max_length=120)
+    objetivo: str = Field("", max_length=500)
+    max_fichas: int = Field(5, ge=1, le=10)
+
+
+class MaterialEstudio(BaseModel):
+    contenido: str = Field(..., min_length=20, max_length=25000)
+    titulo: str = Field("", max_length=200)
+    coleccion: str = Field("Material de estudio", max_length=120)
+    max_fichas: int = Field(5, ge=1, le=15)
 
 
 # Valida la respuesta enviada por el estudiante en POST /api/preguntas/{id}/responder.
@@ -127,10 +182,30 @@ def estado() -> dict[str, Any]:
     return agente.estado()
 
 
-# Lista todos los temas y DevCards en estudio con sus métricas SM-2 para "Mis temas".
+# Lista y filtra temas y DevCards en estudio con sus métricas SM-2 para "Mis temas".
 @app.get("/api/temas")
-def temas() -> list[dict[str, Any]]:
+def temas(q: str = "", coleccion_id: Optional[int] = None, tipo: Optional[str] = None) -> list[dict[str, Any]]:
+    if q or coleccion_id is not None or tipo:
+        return agente.buscar_temas(q=q, coleccion_id=coleccion_id, tipo=tipo)
     return agente.memoria.listar_temas()
+
+
+@app.get("/api/colecciones")
+def listar_colecciones() -> list[dict[str, Any]]:
+    return agente.listar_colecciones()
+
+
+@app.get("/api/colecciones/{coleccion_id}/exportar")
+def exportar_coleccion(coleccion_id: int, formato: str = "json") -> Any:
+    try:
+        resultado = agente.exportar_coleccion(coleccion_id, formato=formato)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if isinstance(resultado, str):
+        return PlainTextResponse(resultado, media_type="text/markdown; charset=utf-8")
+    return resultado
 
 
 # Devuelve preguntas pendientes; añade si exige lectura previa y, en ese caso, la ficha completa sin la respuesta.
@@ -170,23 +245,123 @@ def progreso() -> dict[str, Any]:
     return agente.progreso()
 
 
+@app.get("/api/brechas")
+def brechas(limite: int = 10) -> dict[str, Any]:
+    return agente.diagnosticar_brechas(limite=limite)
+
+
 # ---- rutas que escriben (requieren token si TUTOR_TOKEN está definido) -----------
 # Crea un tema nuevo con notas propias (POST /api/temas) delegando en AgenteTutor.agregar_tema().
 @app.post("/api/temas", status_code=201, dependencies=[Depends(exigir_token)])
 def crear_tema(body: TemaNuevo) -> dict[str, Any]:
     try:
-        return agente.agregar_tema(body.nombre, body.notas)
+        return agente.agregar_tema(
+            body.nombre,
+            body.notas,
+            coleccion_id=body.coleccion_id,
+            tipo=body.tipo,
+            codigo=body.codigo,
+            lenguaje=body.lenguaje,
+            analogia=body.analogia,
+            idea_clave=body.idea_clave,
+            etiquetas=body.etiquetas,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.patch("/api/temas/{tema_id}", dependencies=[Depends(exigir_token)])
+def editar_tema(tema_id: int, body: TemaEdicion) -> dict[str, Any]:
+    campos = body.model_dump(exclude_unset=True)
+    try:
+        return agente.editar_tema(tema_id, **campos)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/temas/{tema_id}/posponer", dependencies=[Depends(exigir_token)])
+def posponer_tema(tema_id: int, body: PosponerBody) -> dict[str, Any]:
+    try:
+        return agente.posponer_tema(tema_id, dias=body.dias)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 # Borra un tema de la base de datos en cascada y deja constancia en la bitácora.
 @app.delete("/api/temas/{tema_id}", dependencies=[Depends(exigir_token)])
 def borrar_tema(tema_id: int) -> dict[str, Any]:
-    if not agente.memoria.borrar_tema(tema_id):
+    if not agente.borrar_tema(tema_id):
         raise HTTPException(status_code=404, detail="No existe ese tema")
-    agente.memoria.anotar("sistema", f"Olvidé el tema {tema_id} a pedido de la persona.")
     return {"borrado": tema_id}
+
+
+@app.post("/api/colecciones", status_code=201, dependencies=[Depends(exigir_token)])
+def crear_coleccion(body: ColeccionNueva) -> dict[str, Any]:
+    try:
+        return agente.crear_coleccion(body.nombre, body.descripcion)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.patch("/api/colecciones/{coleccion_id}", dependencies=[Depends(exigir_token)])
+def actualizar_coleccion(coleccion_id: int, body: ColeccionCambio) -> dict[str, Any]:
+    try:
+        return agente.actualizar_coleccion(
+            coleccion_id, nombre=body.nombre, descripcion=body.descripcion, activa=body.activa
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.delete("/api/colecciones/{coleccion_id}", dependencies=[Depends(exigir_token)])
+def borrar_coleccion(coleccion_id: int, borrar_temas: bool = False) -> dict[str, Any]:
+    if not agente.borrar_coleccion(coleccion_id, borrar_temas=borrar_temas):
+        raise HTTPException(status_code=404, detail="No existe esa colección")
+    return {"borrado": coleccion_id}
+
+
+@app.post("/api/colecciones/importar", status_code=201, dependencies=[Depends(exigir_token)])
+def importar_coleccion(body: ImportacionBody) -> dict[str, Any]:
+    try:
+        return agente.importar_coleccion(body.datos, formato=body.formato, nombre_coleccion=body.nombre_coleccion)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/estudiar/codigo", status_code=201, dependencies=[Depends(exigir_token)])
+def estudiar_codigo(body: CodigoEstudio) -> dict[str, Any]:
+    try:
+        return agente.estudiar_codigo(
+            body.codigo,
+            titulo=body.titulo,
+            lenguaje=body.lenguaje,
+            coleccion=body.coleccion,
+            objetivo=body.objetivo,
+            max_fichas=body.max_fichas,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/estudiar/material", status_code=201, dependencies=[Depends(exigir_token)])
+def ingestar_material(body: MaterialEstudio) -> dict[str, Any]:
+    try:
+        return agente.ingestar_material(
+            body.contenido,
+            titulo=body.titulo,
+            coleccion=body.coleccion,
+            max_fichas=body.max_fichas,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 # Evalúa tu respuesta con AgenteTutor.responder() y devuelve nota, explicación y nueva fecha SM-2.

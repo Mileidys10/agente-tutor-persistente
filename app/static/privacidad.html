@@ -12,7 +12,7 @@
       <div class="cabecera-superior">
         <div class="identidad">
           <h1>Privacidad y uso de datos</h1>
-          <p class="texto-suave">Agente Tutor Persistente</p>
+          <p class="texto-suave">Agente Tutor Persistente v2.0</p>
         </div>
         <div class="cabecera-acciones">
           <a href="/" class="btn btn-secundario">Volver al tutor</a>
@@ -24,56 +24,55 @@
   <main class="contenedor">
     <article class="articulo-legal">
       <p>
-        Esta página explica de forma directa qué información almacena el Agente Tutor Persistente,
-        cuándo sale del servidor y cómo puedes borrarla.
+        Esta página explica qué información almacena el Agente Tutor Persistente,
+        cuándo sale del servidor y cómo puedes exportarla o eliminarla de forma definitiva.
       </p>
 
       <h2>1. Qué datos se guardan</h2>
       <p>La base de datos del agente (PostgreSQL en producción o SQLite en entorno local) guarda exclusivamente:</p>
       <ul>
-        <li>Los temas que agregas manualmente junto con sus notas de estudio.</li>
+        <li>Tus colecciones personalizadas, temas propios, fragmentos de código ingresados y apuntes/Markdown.</li>
         <li>Los mazos de DevCards que decides activar o pausar.</li>
-        <li>Las preguntas generadas, tus respuestas, la calificación (0–5), la retroalimentación y los parámetros de repetición espaciada SM-2.</li>
-        <li>La bitácora operativa de ciclos, arranques y decisiones del agente.</li>
+        <li>Las preguntas generadas, tus respuestas, la calificación (0–5), la retroalimentación y los parámetros SM-2.</li>
+        <li>Las métricas diarias de racha de estudio y la bitácora operativa de ciclos, decisiones y reflexiones del agente.</li>
       </ul>
 
       <h2>2. Cuándo se envían datos a Google Gemini</h2>
       <p>
-        Si quien administra el servidor configura una clave <code>GEMINI_API_KEY</code>, el nombre del tema,
-        tus notas de estudio y tus respuestas a preguntas abiertas se envían a la API de Google Gemini
-        únicamente para generar preguntas y evaluar respuestas.
+        Si quien administra el servidor configura una clave <code>GEMINI_API_KEY</code>, el título, notas,
+        código de estudio o respuestas abiertas se envían a Google Gemini únicamente para descomponer material,
+        generar preguntas y evaluar respuestas (delimitados para evitar inyección de instrucciones).
       </p>
       <p>
-        Si no hay clave configurada, todo el procesamiento ocurre en local mediante el motor determinista
-        del agente y el banco integrado de 1 295 tarjetas DevCards.
+        Sin clave configurada, todo el análisis de código, segmentación Markdown, generación de preguntas y
+        evaluación funciona al 100% en local mediante el motor determinista del agente y el banco de 1 295 DevCards.
       </p>
 
       <h2>3. Cuentas, cookies y almacenamiento en el navegador</h2>
       <ul>
-        <li>Esta aplicación no utiliza cuentas de usuario, contraseñas personales ni perfiles.</li>
-        <li>No utiliza cookies de seguimiento, analítica ni publicidad de terceros.</li>
+        <li>Esta aplicación no utiliza cuentas de usuario ni cookies de seguimiento o publicidad de terceros.</li>
         <li>
           Únicamente utiliza <code>localStorage</code> en tu navegador para recordar de forma opcional
-          la clave de acceso (<code>TUTOR_TOKEN</code>) y evitar escribirla en cada petición. Puedes borrarla
-          en cualquier momento desde el botón «Clave de acceso».
+          la clave de acceso (<code>TUTOR_TOKEN</code>). Puedes borrarla cuando quieras desde «Clave de acceso».
         </li>
       </ul>
 
-      <h2>4. Cómo borrar tus temas y respuestas</h2>
+      <h2>4. Portabilidad y derecho al olvido</h2>
       <p>
-        Puedes eliminar cualquier tema en cualquier momento desde la sección <strong>«Mis temas»</strong>
-        pulsando <strong>«Borrar»</strong> y confirmando la acción (o llamando al endpoint
-        <code>DELETE /api/temas/{id}</code> con la clave de acceso).
+        Puedes exportar cualquier colección completa en formato <strong>JSON</strong> o <strong>Markdown</strong>
+        en cualquier momento desde la sección «Colecciones» (o <code>GET /api/colecciones/{id}/exportar</code>).
       </p>
       <p>
-        Al borrar un tema se eliminan en cascada todas las preguntas y respuestas asociadas a ese tema.
+        Puedes borrar cualquier tema individual desde <strong>«Mis temas y código»</strong> (<code>DELETE /api/temas/{id}</code>)
+        o una colección completa con sus fichas (<code>DELETE /api/colecciones/{id}?borrar_temas=true</code>), eliminando
+        en cascada todas sus preguntas y respuestas asociadas.
       </p>
     </article>
   </main>
 
   <footer class="pie">
     <div class="contenedor pie-interior">
-      <p>Agente Tutor Persistente</p>
+      <p>Agente Tutor Persistente v2.0</p>
       <p class="pie-enlaces">
         <a href="/">Volver a la aplicación</a>
       </p>
