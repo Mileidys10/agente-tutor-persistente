@@ -120,3 +120,54 @@ def test_forzar_ciclo_no_revela_la_respuesta(cliente) -> None:
     c.post("/api/temas", json={"nombre": "Redes", "notas": "TCP garantiza la entrega ordenada de los paquetes."}, headers=H)
     creadas = c.post("/api/ciclo", headers=H).json()["preguntas_creadas"]
     assert creadas and all("respuesta_esperada" not in p for p in creadas)
+
+
+def test_cobertura_completa_nueve_herramientas_mcp(cliente) -> None:
+    c, main = cliente
+    h = {**MCP_H, "Authorization": "Bearer secreto-de-prueba"}
+    init = _rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}})
+    c.post("/mcp", json=init, headers=h)
+
+    # 1. agregar_tema
+    r_agr = c.post("/mcp", json=_rpc("tools/call", {"name": "agregar_tema", "arguments": {"nombre": "Docker", "notas": "Contenedores ligeros."}}, 10), headers=h)
+    assert r_agr.status_code == 200
+
+    # Forzar ciclo para generar una pregunta
+    c.post("/api/ciclo", headers=H)
+
+    # 2. ver_preguntas_pendientes
+    r_pend = c.post("/mcp", json=_rpc("tools/call", {"name": "ver_preguntas_pendientes", "arguments": {}}, 11), headers=h)
+    assert r_pend.status_code == 200
+    pendientes = r_pend.json()["result"]["content"][0]["text"]
+    assert "pregunta_id" in pendientes
+
+    preg_id = main.agente.memoria.pendientes()[0]["id"]
+
+    # 3. marcar_tarjeta_leida
+    r_lei = c.post("/mcp", json=_rpc("tools/call", {"name": "marcar_tarjeta_leida", "arguments": {"pregunta_id": preg_id}}, 12), headers=h)
+    assert r_lei.status_code == 200
+
+    # 4. responder_pregunta
+    r_resp = c.post("/mcp", json=_rpc("tools/call", {"name": "responder_pregunta", "arguments": {"pregunta_id": preg_id, "respuesta": "Contenedores"}}, 13), headers=h)
+    assert r_resp.status_code == 200
+
+    # 5. ver_mazos
+    r_maz = c.post("/mcp", json=_rpc("tools/call", {"name": "ver_mazos", "arguments": {}}, 14), headers=h)
+    assert r_maz.status_code == 200
+
+    # 6. activar_mazo
+    r_act = c.post("/mcp", json=_rpc("tools/call", {"name": "activar_mazo", "arguments": {"categoria": "Docker", "activo": True}}, 15), headers=h)
+    assert r_act.status_code == 200
+
+    # 7. ver_progreso
+    r_prog = c.post("/mcp", json=_rpc("tools/call", {"name": "ver_progreso", "arguments": {}}, 16), headers=h)
+    assert r_prog.status_code == 200
+
+    # 8. ver_estado
+    r_est = c.post("/mcp", json=_rpc("tools/call", {"name": "ver_estado", "arguments": {}}, 17), headers=h)
+    assert r_est.status_code == 200
+
+    # 9. ver_bitacora
+    r_bit = c.post("/mcp", json=_rpc("tools/call", {"name": "ver_bitacora", "arguments": {"limite": 5}}, 18), headers=h)
+    assert r_bit.status_code == 200
+

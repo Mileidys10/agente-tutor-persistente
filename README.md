@@ -1,5 +1,7 @@
 # Agente Tutor Persistente
 
+[![M8ven Score](https://m8ven.ai/badge/mcp/mileidys10-agente-tutor-persistente-ajgjq6?v=85ffddd3df4b4781d831c556a191d3f7)](https://m8ven.ai/mcp/mileidys10-agente-tutor-persistente-ajgjq6?s=readme)
+
 Agente autónomo de estudio con memoria duradera en base de datos, repetición espaciada (**SM-2**), banco integrado de **1 295 tarjetas técnicas (DevCards)** en **42 categorías** y servidor **MCP** (*Model Context Protocol*). A diferencia de un chat sin estado que olvida al cerrar la pestaña, el agente mantiene un ciclo continuo en segundo plano (**percibir → decidir → actuar**) y retoma exactamente donde estaba después de cualquier reinicio o despliegue.
 
 ---
