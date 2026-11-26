@@ -9,7 +9,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -100,7 +100,7 @@ class TemaNuevo(BaseModel):
     nombre: str = Field(..., min_length=2, max_length=200)
     notas: str = Field("", max_length=8000)
     coleccion_id: Optional[int] = None
-    tipo: str = Field("nota", max_length=20)
+    tipo: Literal["nota", "codigo", "material"] = "nota"
     codigo: str = Field("", max_length=12000)
     lenguaje: str = Field("", max_length=40)
     analogia: str = Field("", max_length=2000)
@@ -174,7 +174,7 @@ class SimulacroBody(BaseModel):
 class RelacionBody(BaseModel):
     origen_id: int
     destino_id: int
-    tipo: str = Field("prerrequisito", max_length=20)
+    tipo: Literal["prerrequisito", "relacionado"] = "prerrequisito"
 
 
 # Valida la respuesta enviada por el estudiante en POST /api/preguntas/{id}/responder.
@@ -237,6 +237,8 @@ def pendientes() -> list[dict[str, Any]]:
     return [
         {
             **{k: p[k] for k in ("id", "tema_id", "tema", "texto", "opciones", "motivo", "fuente", "creada")},
+            "pistas_usadas": int(p.get("pistas_usadas") or 0),
+            "sesion_examen_id": p.get("sesion_examen_id"),
             "requiere_lectura": bool(p.get("requiere_lectura")),
             "lectura": agente.lectura_de(p),
         }

@@ -13,6 +13,7 @@ Todo el estado está en la base de datos: si el proceso muere, al volver retoma 
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -52,6 +53,7 @@ class AgenteTutor:
         self.memoria = memoria or Memoria(config.database_url)
         self.cerebro = cerebro or Cerebro(config.gemini_api_key, config.gemini_modelo)
         self.banco = banco if banco is not None else BancoDevCards()
+        # shortcut: un RLock + hilo daemon en proceso único (techo: 1 worker Uvicorn; escalar = worker/cron externo).
         self._lock = threading.RLock()  # un solo flujo a la vez toca la memoria: ciclo, API y MCP
         self._stop = threading.Event()
         self._hilo: Optional[threading.Thread] = None
@@ -236,25 +238,28 @@ class AgenteTutor:
         return marcados
 
     # Anota el motivo en bitácora y guarda la pregunta pendiente usando DevCards o Cerebro (Gemini/local).
-    def _preparar_pregunta(self, tema: dict[str, Any], motivo: str) -> dict[str, Any]:
+    def _preparar_pregunta(
+        self, tema: dict[str, Any], motivo: str,
+        forzar_sin_lectura: bool = False, sesion_examen_id: Optional[int] = None,
+    ) -> dict[str, Any]:
         self.memoria.anotar("decision", motivo)
         tarjeta = self.banco.por_id.get(str(tema.get("ref_externa"))) if tema.get("origen") == "devcards" else None
+        vista_antes = int(tema["aciertos"]) + int(tema["fallos"])
         if tarjeta is not None:
-            vista_antes = int(tema["aciertos"]) + int(tema["fallos"])
             datos = BancoDevCards.pregunta_de(tarjeta, vista_antes)
             # Solo la primera vez se lee la tarjeta; en los repasos se responde de memoria (recuerdo activo).
+            req = False if forzar_sin_lectura else bool(self.config.leer_antes and vista_antes == 0)
             p = self.memoria.crear_pregunta(
                 int(tema["id"]), datos["texto"], datos["respuesta_esperada"], motivo, "devcards",
                 opciones=datos["opciones"], explicacion=datos["explicacion"],
-                requiere_lectura=self.config.leer_antes and vista_antes == 0,
+                requiere_lectura=req, sesion_examen_id=sesion_examen_id,
             )
         else:
-            vista_antes = int(tema["aciertos"]) + int(tema["fallos"])
             es_ficha_rica = (
                 tema.get("tipo") in ("codigo", "material")
                 or bool(tema.get("codigo") or tema.get("analogia") or tema.get("idea_clave"))
             )
-            requiere_lectura = bool(
+            req = False if forzar_sin_lectura else bool(
                 self.config.leer_antes and ((es_ficha_rica and vista_antes == 0) or tema.get("en_refuerzo"))
             )
             fallos_prev = self.memoria.fallos_recientes(int(tema["id"]))
@@ -265,7 +270,7 @@ class AgenteTutor:
             p = self.memoria.crear_pregunta(
                 int(tema["id"]), preg.texto, preg.respuesta_esperada, motivo, preg.fuente,
                 explicacion=str(tema.get("idea_clave") or ""),
-                requiere_lectura=requiere_lectura,
+                requiere_lectura=req, sesion_examen_id=sesion_examen_id,
             )
         self.memoria.anotar("pregunta", f"Preparé una pregunta sobre «{tema['nombre']}» ({p['fuente']}).")
         return p
@@ -594,7 +599,7 @@ class AgenteTutor:
                 frente = str(f.get("nombre") or "").replace("\t", " ").replace("\n", "<br>").strip()
                 partes_back = [str(f.get("notas") or "")]
                 if f.get("codigo"):
-                    partes_back.append(f"<pre><code>{f['codigo']}</code></pre>")
+                    partes_back.append(f"<pre><code>{html.escape(str(f['codigo']))}</code></pre>")
                 if f.get("idea_clave"):
                     partes_back.append(f"Idea clave: {f['idea_clave']}")
                 reverso = "<br>".join(p for p in partes_back if p).replace("\t", " ").replace("\n", "<br>").strip()
@@ -610,6 +615,10 @@ class AgenteTutor:
     def importar_coleccion(
         self, datos: dict[str, Any] | str, formato: str = "json", nombre_coleccion: str = "",
     ) -> dict[str, Any]:
+        if isinstance(datos, str) and len(datos) > 200_000:
+            raise ValueError("El contenido a importar supera el límite de 200 000 caracteres")
+        if not isinstance(datos, (dict, str)) or (isinstance(datos, str) and not datos.strip()):
+            raise ValueError("El contenido a importar no es válido o está vacío")
         fmt = formato.strip().lower()
         fichas_entrada: list[dict[str, Any]] = []
         descripcion = ""
@@ -822,6 +831,8 @@ class AgenteTutor:
                 raise LookupError("No existe esa pregunta")
             if p["estado"] != "pendiente":
                 raise ValueError("La pregunta ya fue respondida")
+            if p.get("requiere_lectura"):
+                raise ValueError("Primero lee la tarjeta")
             nivel = self.memoria.incrementar_pistas(pregunta_id)
             pista = generar_pista_progresiva(p, nivel)
             self.memoria.anotar("decision", f"Entregué pista nivel {nivel}/3 para «{p['tema']}».")
@@ -882,27 +893,9 @@ class AgenteTutor:
             motivo = f"Simulacro «{sesion['titulo']}» (#{sesion['id']})."
 
             for tema in candidatos:
-                tarjeta = self.banco.por_id.get(str(tema.get("ref_externa"))) if tema.get("origen") == "devcards" else None
-                if tarjeta is not None:
-                    vista_antes = int(tema["aciertos"]) + int(tema["fallos"])
-                    datos = BancoDevCards.pregunta_de(tarjeta, vista_antes)
-                    p = self.memoria.crear_pregunta(
-                        int(tema["id"]), datos["texto"], datos["respuesta_esperada"], motivo, "devcards",
-                        opciones=datos["opciones"], explicacion=datos["explicacion"],
-                        requiere_lectura=False, sesion_examen_id=int(sesion["id"]),
-                    )
-                else:
-                    vista_antes = int(tema["aciertos"]) + int(tema["fallos"])
-                    fallos_prev = self.memoria.fallos_recientes(int(tema["id"]))
-                    if tema.get("tipo") == "codigo" or tema.get("codigo"):
-                        preg = self.cerebro.generar_pregunta_codigo(tema, fallos_prev, vista_antes)
-                    else:
-                        preg = self.cerebro.generar_pregunta(str(tema["nombre"]), str(tema["notas"]), fallos_prev)
-                    p = self.memoria.crear_pregunta(
-                        int(tema["id"]), preg.texto, preg.respuesta_esperada, motivo, preg.fuente,
-                        explicacion=str(tema.get("idea_clave") or ""),
-                        requiere_lectura=False, sesion_examen_id=int(sesion["id"]),
-                    )
+                p = self._preparar_pregunta(
+                    tema, motivo, forzar_sin_lectura=True, sesion_examen_id=int(sesion["id"])
+                )
                 preguntas_creadas.append({
                     "id": p["id"],
                     "tema_id": p["tema_id"],

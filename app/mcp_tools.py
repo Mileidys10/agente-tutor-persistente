@@ -42,6 +42,8 @@ def _limpiar(p: dict[str, Any]) -> dict[str, Any]:
         "pregunta": p["texto"],
         "opciones": p.get("opciones"),
         "motivo": p.get("motivo"),
+        "pistas_usadas": int(p.get("pistas_usadas") or 0),
+        "sesion_examen_id": p.get("sesion_examen_id"),
         "requiere_lectura": bool(p.get("requiere_lectura")),
     }
 

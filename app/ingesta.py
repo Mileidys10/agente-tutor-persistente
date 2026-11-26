@@ -29,7 +29,7 @@ _ALIAS_LENGUAJE = {
 
 _PALABRAS_RESERVADAS = {
     "return", "import", "from", "class", "async", "await", "const", "let", "var",
-    "function", "select", "where", "from", "insert", "update", "delete", "raise",
+    "function", "select", "where", "insert", "update", "delete", "raise",
     "throw", "yield", "elif", "else", "except", "finally", "while", "break",
 }
 
@@ -408,11 +408,9 @@ def generar_pista_progresiva(pregunta: dict[str, Any], nivel: int) -> str:
 
     # Nivel 3: esqueleto enmascarado sin entregar la respuesta literal
     if opciones and esperada in opciones:
-        letras = "ABCDEFGH"
         idx = opciones.index(esperada)
-        letra = letras[idx] if idx < len(letras) else "?"
-        mitad = max(0, (idx + 1) // 2)
-        return f"Pista 3/3 (casi listo): La opción correcta está en la zona {'alta (A-D)' if idx < 4 else 'baja (E-H)'}; empieza por «{esperada[:2]}…» (descarta las primeras {mitad})." if mitad else f"Pista 3/3: Empieza por «{esperada[:3]}…» (letra cercana a {letra if False else 'inicio'})."
+        zona = "A-B" if idx < 2 else "C-D" if idx < 4 else "E-H"
+        return f"Pista 3/3 (estructura): Empieza por «{esperada[0]}…» ({len(esperada)} caracteres) y está en el grupo {zona}."
 
     tokens = [t for t in re.findall(r"[a-zA-Z0-9áéíóúñÁÉÍÓÚÑ_]+", esperada)]
     if not tokens:

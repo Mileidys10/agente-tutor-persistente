@@ -272,8 +272,12 @@ class Memoria:
 
     # Lo llama AgenteTutor.ciclo() al final de cada ronda autónoma para guardar último ciclo y total acumulado.
     def registrar_ciclo(self) -> None:
+        t = ahora()
         with self.engine.begin() as c:
-            c.execute(update(latido).where(latido.c.id == 1).values(ultimo_ciclo=ahora(), ciclos=latido.c.ciclos + 1))
+            if c.execute(select(latido.c.id).where(latido.c.id == 1)).first() is None:
+                c.execute(latido.insert().values(id=1, primer_arranque=t, ultimo_arranque=t, ultimo_ciclo=t, ciclos=1, arranques=0))
+            else:
+                c.execute(update(latido).where(latido.c.id == 1).values(ultimo_ciclo=t, ciclos=latido.c.ciclos + 1))
 
     # Lee el estado del latido para GET /health (main.py) y GET /api/estado (agente.estado).
     def leer_latido(self) -> dict[str, Any]:
@@ -761,8 +765,16 @@ class Memoria:
         return {"respuestas": int(fila.respuestas or 0), "aciertos": int(fila.aciertos or 0)}
 
     def registrar_notificacion(self, fecha_str: str) -> None:
+        t = ahora()
         with self.engine.begin() as c:
-            c.execute(update(latido).where(latido.c.id == 1).values(ultima_notificacion=fecha_str[:10]))
+            if c.execute(select(latido.c.id).where(latido.c.id == 1)).first() is None:
+                c.execute(
+                    latido.insert().values(
+                        id=1, primer_arranque=t, ultimo_arranque=t, ciclos=0, arranques=0, ultima_notificacion=fecha_str[:10]
+                    )
+                )
+            else:
+                c.execute(update(latido).where(latido.c.id == 1).values(ultima_notificacion=fecha_str[:10]))
 
     # ---- pistas progresivas, relaciones de temas y simulacros (v3.0) --------
     def incrementar_pistas(self, pregunta_id: int) -> int:
@@ -801,15 +813,25 @@ class Memoria:
             if dup:
                 return _fila(c.execute(select(relaciones_temas).where(relaciones_temas.c.id == dup[0])).first())
             if tipo_limpio == "prerrequisito":
-                ciclo = c.execute(
-                    select(relaciones_temas.c.id).where(
-                        relaciones_temas.c.origen_id == destino_id,
-                        relaciones_temas.c.destino_id == origen_id,
-                        relaciones_temas.c.tipo == "prerrequisito",
+                # Recorrido BFS desde destino_id para detectar ciclos directos y transitivos (A->B->C->A).
+                aristas = c.execute(
+                    select(relaciones_temas.c.origen_id, relaciones_temas.c.destino_id).where(
+                        relaciones_temas.c.tipo == "prerrequisito"
                     )
-                ).first()
-                if ciclo:
-                    raise ValueError("Ciclo detectado: el tema destino ya es prerrequisito del origen")
+                ).all()
+                adyacencia: dict[int, list[int]] = {}
+                for o, d in aristas:
+                    adyacencia.setdefault(int(o), []).append(int(d))
+                visitados: set[int] = set()
+                cola = [destino_id]
+                while cola:
+                    actual = cola.pop(0)
+                    if actual == origen_id:
+                        raise ValueError("Ciclo detectado en los prerrequisitos")
+                    if actual in visitados:
+                        continue
+                    visitados.add(actual)
+                    cola.extend(adyacencia.get(actual, []))
             rid = c.execute(
                 relaciones_temas.insert().values(
                     origen_id=origen_id, destino_id=destino_id, tipo=tipo_limpio, creado=ahora()
